@@ -13,11 +13,15 @@
 !.gitignore
 !requirements.txt
 
-# Allow example system prompt
+# Allow example system prompt (Un-ignore folder structure to allow file whitelist)
+!sysprm files/
+sysprm files/*
 !sysprm files/survivor_45_hebrew.sysprm
 
 # Allow screenshots for README
 !screenshots/
+screenshots/*
+!screenshots/*.png
 
 # Explicitly ensure sensitive settings are ignored (Safety double-check)
 translator_settings.json
