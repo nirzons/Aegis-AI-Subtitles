@@ -238,7 +238,7 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
             reasons.append(f"Batch Density anomaly ({batch_ratio:.2f})")
             heb_reasons.append(f"GLOBAL|זוהתה חריגה בצפיפות הטקסט הכללית של הבאץ' (יחס תרגום/מקור של {batch_ratio:.2f}).")
 
-    skip_judge = has_bracket_sdh or has_overlong_hebrew_line or has_expansion_anomaly
+    skip_judge = has_bracket_sdh or has_overlong_hebrew_line or has_expansion_anomaly or any("STRICT:" in r for r in reasons)
 
     if reasons:
         return True, "; ".join(reasons), "; ".join(heb_reasons), skip_judge

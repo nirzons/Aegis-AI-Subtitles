@@ -6,9 +6,8 @@ Advanced system for translating and synchronizing subtitle files (SRT) from Engl
 - **LLM Translator Controller**: Manages subtitle translation in context-aware batches (2 preceding and 2 succeeding blocks), along with dynamic state tracking for speaker gender and plot summaries.
 - **Heuristic Auditor**: Fast local scanner (Regex-Based) implementing precise control constraints.
     - **Index-Resolved Tagging:** The Auditor tracks and tags specific reasons per index (e.g. `IDX:102|English Letters`).
+    - **Dynamic Name Blocking:** Supports a show-specific `illegal_labels` list (defined in the project's `.sysprm`) to catch and remove prohibited speaker names (e.g., `ג'ף:`, `PROBST:`) while remaining globally generic.
     - **Extreme Omission/Summarization Check:** A new lower-ratio detection (ratio < 0.4) catches suspicious summarization in segments with 4+ words.
-    - **Smart "Silent Skip" Filter:** Short connectors (1-2 words or <12 chars) are allowed to be merged/skipped silently, while longer segments trigger a failure.
-    - **Multi-line Speaker Check:** An aggressive regex scan covering every line (including dialogue dashes) detects Hebrew or English speaker names (e.g., `ג'ף:`).
     - **Immediate Retry (Skip Judge):** Square brackets `[ ]`, overlong lines (>9 words per line), and extreme single-block **Verbosification (>2.0x target expansion)** immediately fail the batch for retry.
     - **Judge Flow:** Other rules, or moderate Verbosification (>1.5x expansion), are aggregated and passed dynamically to the Judge.
 - **Chunked AI Judge (Structured Feedback)**: Context-Aware AI "Judge" that performs quality audits in chunks (e.g. 20 lines). Invoked when heuristics flag suspicion.
@@ -20,7 +19,9 @@ Advanced system for translating and synchronizing subtitle files (SRT) from Engl
 - **Self-Healing Loop**: A **single** failure at a stride (above size 3) triggers a **retry at the same stride**. After a **second** consecutive failure at that stride, size is reduced and retried. After success, **effective batch size** for the rest of the job is the **penultimate stride** in that chunk’s attempt list.
 
 ### Infrastructure & Persistence:
-- **Hot Resume Workflow**: Allows stopping a translation, tuning parameters (batch sizes, models) in the UI, and resuming from the same point without restarting.
+- **🔄 Hot Resume**: Seamlessly stop, tune parameters (batch sizes, models), and resume without losing session history.
+- **📋 Clipboard Integration**: Added a one-click button to copy Terminal Output logs for easy debugging and sharing.
+- **💰 Cost-Optimized**: Fully utilizes prompt caching and token tracking for maximum efficiency.
     - **Automatic Session Latching:** UI automatically sorts checkpoints by modification time and auto-selects the latest match for the current SRT.
     - **Batch Override:** Manual UI batch size changes are detected during resume and override the checkpoint's "effective" memory.
 - **Interactive Checkpoint Management**: Saves the full session state (models, costs, context, files) in JSON files. Includes a management interface for deleting, cleaning, or resuming work from the exact stopping point.
@@ -31,7 +32,8 @@ Advanced system for translating and synchronizing subtitle files (SRT) from Engl
     - **Persistent Terminal History:** The terminal window (GUI) is no longer wiped during a "Hot Resume"; instead, it inserts a timestamped `🔄 SESSION RESUMED` separator to maintain diagnostic context.
 
 ### User Interface (GUI Control Center):
-- **Central Dashboard**: Management of the translation process, model selection (Translator and Judge), and real-time viewing of LLM logs.
+- **Central Dashboard**: Management of the translation process, model selection (Translator and Judge), and real-time viewing of LLM logs. 
+    - **Copy Logs Button:** A new clipboard integration allows users to instantly copy the current terminal output.
 - **Settings Window**: Multi-tab settings window for managing API keys and personal model configurations.
 - **Live Translation Viewer**: Side-by-side view of the source text against the live translation for real-time audit.
 
@@ -43,7 +45,7 @@ The codebase splits the **Tkinter GUI**, **translation worker**, **provider APIs
 - **translation_engine.py**: Core batch loop: assembles context windows, calls the main LLM, runs `pre_repair_json`, `check_heuristics`, optional `call_llm_judge`. Implements **Surgical Prompt Injection** by parsing index-resolved error maps (Auditor tags or Judge JSON) into targeted retry instructions. Updates checkpoints (including `effective_batch_size`) and `context_state`.
 
 **Main-window UI vs. secondary windows**
-- **ui_layout.py**: `MainUILayout` — lays out the primary dashboard (model/batch/SRT controls, start/stop, log area, cost line) and binds widgets to the app instance.
+- **ui_layout.py**: `MainUILayout` — lays out the primary dashboard (model/batch/SRT controls, start/stop, log area, cost line) and binds widgets to the app instance. Features a refactored `labelwidget` header for the terminal output area to integrate the Copy button natively into the frame's title.
 - **gui_windows.py**: Toplevel dialogs — `LiveViewer` (side-by-side English/Hebrew tree), `SettingsWindow` (API keys and model catalog), `CheckpointsWindow` (session JSON management, PID checks via `is_process_alive`).
 
 **Configuration & prompts**
@@ -69,10 +71,11 @@ The top of the file (before the `===` separator) is a JSON block that initialize
 {
   "summary": "Plot summary of the previous episode.",
   "last_speaker": "Jeff (M)",
-  "speakers_gender": {"Dee": "F", "Austin": "M"}
+  "speakers_gender": {"Dee": "F", "Austin": "M"},
+  "illegal_labels": ["ג'ף", "PROBST", "Jeff"]
 }
 ```
-*Note: If you don't need an initial state, you can start the file directly with `===`.*
+*Note: `illegal_labels` allows the heuristic auditor to block specific show-specific speaker names (like the host) without hardcoding them into the Python engine.*
 
 #### 3. The Separator (`===`)
 A mandatory line consisting of three equals signs separates the initial state from the project instructions.
