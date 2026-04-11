@@ -131,7 +131,7 @@ def check_heuristics(eng_dict, heb_dict):
                 reasons.append(f"High expansion at index {idx} ({block_ratio:.1f}x)")
             elif block_ratio < 0.4 and eng_wc >= 4:
                 reasons.append(f"Extreme omission at index {idx} ({block_ratio:.1f}x)")
-                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום קצר באופן מחשיד ביחס לאורך המשפט באנגלית. ודא שלא הושמט מידע חשוב (ולא הושמטו מילים תוך כדי תקציר המשפט).")
+                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום קצר ביחס לאורך המקור. ודא שלא הושמט מידע מהותי. אזהרה: אל תתרגם מילולית בראשך! זכור שביטויים באנגלית (כמו 'vote out') מתורגמים לעיתים קרובות למילה אחת בלבד (כמו 'הדחה') בהתאם למילון המונחים. אם הרעיון הכללי נשמר בהצלחה בצורה תמציתית - באחריותך להתעלם מההתרעה ולאשר (true).")
 
         # 1. בדיקת "דילוג שקט" (Hebrew empty but Eng not)
         # If the English text matches the "Trash" pattern, an empty Hebrew result is SUCCESS.
