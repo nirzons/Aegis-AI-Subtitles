@@ -115,8 +115,11 @@ def check_heuristics(eng_dict, heb_dict):
     for idx, eng_text in eng_dict.items():
         heb_text = str(heb_dict.get(idx, "")).strip()
         
-        # Count words for batch density and single-block ratio
-        eng_wc = len(re.findall(r'\w+', eng_text))
+        # 0. שדרוג קריטי: הסרת SDH (סוגריים מרובעים, עגולים ומוזיקה) לפני ספירת המילים
+        eng_text_clean = re.sub(r'\[.*?\]|\(.*?\)|♪', '', eng_text)
+        
+        # Count words for batch density and single-block ratio - עכשיו סופר רק מילים אמיתיות!
+        eng_wc = len(re.findall(r'\w+', eng_text_clean))
         heb_wc = len(re.findall(r'\w+', heb_text))
         total_eng_words += eng_wc
         total_heb_words += heb_wc
@@ -134,15 +137,13 @@ def check_heuristics(eng_dict, heb_dict):
                 heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום קצר ביחס לאורך המקור. ודא שלא הושמט מידע מהותי. אזהרה: אל תתרגם מילולית בראשך! זכור שביטויים באנגלית (כמו 'vote out') מתורגמים לעיתים קרובות למילה אחת בלבד (כמו 'הדחה') בהתאם למילון המונחים. אם הרעיון הכללי נשמר בהצלחה בצורה תמציתית - באחריותך להתעלם מההתרעה ולאשר (true).")
 
         # 1. בדיקת "דילוג שקט" (Hebrew empty but Eng not)
-        # If the English text matches the "Trash" pattern, an empty Hebrew result is SUCCESS.
-        # Updated regex: Matches a single ♪, [], or (), OR symbols with text inside them.
-        is_pure_sdh = bool(re.fullmatch(r"[-.\s]*([\[(♪].*?[\])♪]|[\[(♪)])[-.\s]*", eng_text.strip()))
+        # אם אחרי שניקינו את ה-SDH ואת סימני הפיסוק לא נשאר כלום - זה אינדקס SDH טהור
+        is_pure_sdh = len(re.sub(r'[-.\s]', '', eng_text_clean)) == 0
 
         if not heb_text and eng_text.strip():
             if not is_pure_sdh:
-                # Flag as 'Silent Skip' ONLY IF the source_text contains more than 2 words (or is longer than 12 characters)
-                # This allows very short connectors (like 'yes', 'oh') to be merged silently.
-                if eng_wc > 2 or len(eng_text.strip()) > 12:
+                # Flag as 'Silent Skip' ONLY IF the clean source_text contains more than 2 words
+                if eng_wc > 2 or len(eng_text_clean.strip()) > 12:
                     reasons.append(f"Silent Skip at index {idx}")
                     heb_reasons.append(f"IDX:{idx}|דילגת על אינדקס {idx} (הוא ריק למרות שיש מלל משמעותי במקור).")
 
