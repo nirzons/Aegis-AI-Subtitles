@@ -94,7 +94,7 @@ def pre_repair_json(raw_res):
     return cleaned
 
 
-def check_heuristics(eng_dict, heb_dict):
+def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
     """
     בדיקת תקינות מקומית (Heuristics) ללא צורך ב-AI.
     מחזירה (is_suspicious: bool, reason: str, skip_judge: bool).
@@ -103,6 +103,9 @@ def check_heuristics(eng_dict, heb_dict):
     במקרים אלה retry מיידי בלי Judge. דליפת SDH בסוגריים עגולים או ♪ מפעילה את השופט
     כשאין את התנאים לעיל.
     """
+    if illegal_labels is None:
+        illegal_labels = []
+    
     reasons = []
     heb_reasons = []
     has_bracket_sdh = False
@@ -177,8 +180,12 @@ def check_heuristics(eng_dict, heb_dict):
             speaker_match = re.search(r'(?m)^(?:\s*-\s*)?([^:\n]{1,15}):', heb_text)
             if speaker_match:
                 found_name = speaker_match.group(1).strip()
-                # We filter out very common words that might end in a colon (rare in Hebrew subs but safe)
-                if found_name.lower() not in ["הערה", "שים לב", "נ.ב"]:
+                # Absolute prohibited labels (Dynamic from sysprm)
+                if found_name.lower() in [val.lower() for val in illegal_labels]:
+                    reasons.append(f"STRICT: Illegal label detected in {idx} ('{found_name}')")
+                    heb_reasons.append(f"IDX:{idx}|זיהוי שם מנחה או תווית אסורה ('{found_name}:') באינדקס {idx}. חל איסור מוחלט לכלול שמות דוברים או מנחה בתרגום. מחק זאת מיד!")
+                # General name labels
+                elif found_name.lower() not in ["הערה", "שים לב", "נ.ב"]:
                     reasons.append(f"Speaker name found in {idx} ('{found_name}')")
                     heb_reasons.append(f"IDX:{idx}|זיהוי שם דובר ('{found_name}:') באינדקס {idx}. חובה למחוק שמות דוברים!")
 

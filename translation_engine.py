@@ -346,7 +346,8 @@ class TranslationEngine:
 
                             strip_music_glyphs_batch(received_dict)
 
-                            is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict)
+                            illegal_labels = context_state.get("illegal_labels", [])
+                            is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels)
                             
                             if is_suspicious:
                                 if not batch_diagnostics_logged:

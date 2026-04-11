@@ -233,13 +233,19 @@ TRANSLATED (HEBREW):
                 formatted_reasons = []
                 has_custom = False
                 for msg_idx, msg in chunk_reasons:
-                    if "זיהוי שם דובר" in msg:
+                    if "זיהוי שם דובר" in msg or "זיהוי שם מנחה" in msg:
                         has_custom = True
+                        is_host = "זיהוי שם מנחה" in msg
                         # Extract the name from the message if possible (format: 'name:')
                         name_match = re.search(r"'(.*?)'", msg)
                         found_name = name_match.group(1).strip(":") if name_match else "המילה החשודה"
                         
-                        custom_msg = f"""### הופעלה התרעת מערכת אוטומטית: ###
+                        if is_host:
+                            custom_msg = f"""### הופעלה התרעת מערכת חמורה: ###
+המערכת הטכנית זיהתה בוודאות שם מנחה/דובר ('{found_name}:') באינדקס {msg_idx}. 
+**משימתך:** חובה עליך לפסול (false) לפי חוק 3. אל תשאיר שמות דוברים או מנחה בתרגום הסופי! השם "{found_name}:" חייב להימחק."""
+                        else:
+                            custom_msg = f"""### הופעלה התרעת מערכת אוטומטית: ###
 המערכת הטכנית זיהתה חשד לשם דובר באינדקס {msg_idx}: ('{found_name}:').
 **משימתך:** בדוק בהקשר. האם "{found_name}" הוא באמת שם של דמות המדברת בתוכנית (ואז עליך לפסול לפי חוק 3)? או שמדובר בחלק אינטגרלי מהטקסט המדובר עצמו (למשל, קריין מכריז, מונח רגיל)? אם זה חלק מהטקסט ולא שם של דובר – **התעלם מההתרעה ואשר (true)**."""
                         formatted_reasons.append(custom_msg)
