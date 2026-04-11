@@ -113,7 +113,12 @@ class MainUILayout:
         self.widgets.lbl_cost.pack(side=tk.RIGHT, padx=15)
 
         # 4. Terminal Output Frame
-        term_frame = ttk.LabelFrame(self.root, text=" 💻 TERMINAL OUTPUT ")
+        term_header = tk.Frame(self.root, bg=self.root["bg"])
+        tk.Label(term_header, text=" 💻 TERMINAL OUTPUT ", font=("Segoe UI", 10, "bold"), fg="#2c3e50", bg=self.root["bg"]).pack(side=tk.LEFT)
+        self.widgets.btn_copy = ttk.Button(term_header, text="📋 Copy Logs", width=15, command=app.copy_logs_to_clipboard)
+        self.widgets.btn_copy.pack(side=tk.LEFT, padx=10)
+
+        term_frame = ttk.LabelFrame(self.root, labelwidget=term_header)
         term_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
 
         self.widgets.log_text = scrolledtext.ScrolledText(term_frame, wrap=tk.WORD, font=("Consolas", 10), bg="#1e272e", fg="#d1d8e0", insertbackground="white")
