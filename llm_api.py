@@ -2,6 +2,7 @@ import os
 import platform
 import subprocess
 import json
+import re
 
 from google import genai
 from google.genai import types
@@ -218,17 +219,40 @@ TRANSLATED (HEBREW):
                 if len(parts) == 2:
                     scope, msg = parts[0], parts[1]
                     if scope == "GLOBAL":
-                        chunk_reasons.append(msg)
+                        chunk_reasons.append(("GLOBAL", msg))
                     elif scope.startswith("IDX:"):
                         idx_list = scope[4:].split(",")
                         if any(str(i) in [str(c) for c in chunk_indices] for i in idx_list):
-                            chunk_reasons.append(msg)
+                            # Try to extract index from scope for specific instruction
+                            msg_idx = idx_list[0] if idx_list else "?"
+                            chunk_reasons.append((msg_idx, msg))
                 else:
-                    chunk_reasons.append(item)
+                    chunk_reasons.append(("?", item))
             
             if chunk_reasons:
-                reasons_text = "\n".join(chunk_reasons)
-                user_prompt += f"\n### אתה הופעלת בגלל הבעיה הבאה שהתגלתה: ###\n{reasons_text}\n\n"
+                formatted_reasons = []
+                has_custom = False
+                for msg_idx, msg in chunk_reasons:
+                    if "זיהוי שם דובר" in msg:
+                        has_custom = True
+                        # Extract the name from the message if possible (format: 'name:')
+                        name_match = re.search(r"'(.*?)'", msg)
+                        found_name = name_match.group(1).strip(":") if name_match else "המילה החשודה"
+                        
+                        custom_msg = f"""### הופעלה התרעת מערכת אוטומטית: ###
+המערכת הטכנית זיהתה חשד לשם דובר באינדקס {msg_idx}: ('{found_name}:').
+**משימתך:** בדוק בהקשר. האם "{found_name}" הוא באמת שם של דמות המדברת בתוכנית (ואז עליך לפסול לפי חוק 3)? או שמדובר בחלק אינטגרלי מהטקסט המדובר עצמו (למשל, קריין מכריז, מונח רגיל)? אם זה חלק מהטקסט ולא שם של דובר – **התעלם מההתרעה ואשר (true)**."""
+                        formatted_reasons.append(custom_msg)
+                    else:
+                        formatted_reasons.append(msg)
+                
+                if has_custom:
+                    reasons_text = "\n\n".join(formatted_reasons)
+                    user_prompt += f"\n{reasons_text}\n\n"
+                else:
+                    # Previous behavior for standard reasons
+                    reasons_text = "\n".join(formatted_reasons)
+                    user_prompt += f"\n### אתה הופעלת בגלל הבעיה הבאה שהתגלתה: ###\n{reasons_text}\n\n"
 
         user_prompt += """### DETERMINISTIC AUDIT RULES (Fail/false IF ANY APPLY) ###
 1. OMISSION: פסול (false) אם ערך TRANSLATED הוא ריק ("") למרות שהמקור מכיל מלל מדובר. **חריג זליגה**: מותר שהתרגום יהיה ריק אם המקור מכיל עד 2 מילים בלבד והמשמעות שלהן הוטמעה בכתובית סמוכה. **חריג קריטי**: כל טקסט שמוקף כולו בסוגריים מרובעים או עגולים (למשל [exclaims], [laughs], (sigh)) מוגדר כאפקט קולי (SDH) ולא כדיאלוג! כמו כן, תווים מוזיקליים (♪). עבור כל אלה, הערך בתרגום חייב להיות מחרוזת ריקה (""). לעולם אל תפסול שורה ריקה אם הטקסט במקור היה עטוף בסוגריים!
@@ -236,8 +260,9 @@ TRANSLATED (HEBREW):
 3. LEAKAGE (דליפה): סרוק את הטקסט העברי ב-TRANSLATED. פסול (false) אם נשאר בתוך הטקסט העברי שם של דובר ואחריו נקודתיים (למשל "SIFU:" או "אמילי:" או "ג'ף:"), או תגיות שמע בסוגריים (כמו [צוחק]), או סמלי מוזיקה (♪). חובה למחוק שמות דוברים! **אזהרה חמורה:** אל תתרגם את שם הדובר לעברית (למשל JEFF -> ג'ף:). השם חייב להימחק לגמרי. אם התגית הייתה במקור אבל הוסרה לחלוטין בתרגום - זה תקין.
 4. ENGLISH: קיימות אותיות באנגלית ב-TRANSLATED. התעלם (אל תפסול) אם מדובר בשם מותג מובהק, ראשי תיבות, איות של מילה (כמו S-I-F-U) או אותיות בודדות המשמשות לתיאור צורה/סמל (כמו האות I, צורת V או הסימון X). אם האות האנגלית נמצאת שם מסיבה לוגית ומוצדקת זו - החזר true.
 5. SEMANTIC FIDELITY, IDIOMS & ALLOWED DRIFT (תוכן, ניבים וזליגה): **פסול (false) רק אם** יש שינוי משמעות **מהותי**, סתירה לוגית למקור, המצאה (Hallucination), או השמטת מונח מפתח שלא מופיע בשום אינדקס סמוך ב-OVERLAP ובגוף הבאץ' הנבדק. **תרגום ביטויים (Idioms): אל תדרוש תרגום מילולי (Word-for-Word). אשר תרגומים שמעבירים את הכוונה והרוח של המקור בצורה טבעית לעברית.** **זליגה מותרת (Shifting):** העברת ניסוח בין אינדקסים **סמוכים** לטובת עברית טבעית — **מותרת** אם **מסת הקול** נשמרת ביחד עם ה-OVERLAP. **לפני פסילה על «השמטה»:** וודא שהחומר «החסר» לא מופיע בתרגום האינדקס **הקודם או הבא** (כולל שורות OVERLAP). **שיוך שגיאות מדויק (קריטי):** אם מצאת שגיאה, **חובה לשייך אותה אך ורק לאינדקס המקורי שבו מופיע הטקסט המקביל באנגלית**. לעולם אל תדווח על שגיאה באינדקס הקודם או הבא. **ספק לטובת המתרגם:** אם חוקים **1–4** מתקיימים והמשמעות הכללית נשמרת עם ה-OVERLAP — **אשר (true)**.
+6. GENDER (מגדר): פער במגדר הדובר (למשל, תרגום "Sorry" כ"מצטערת" במקום "מצטער" או להפך) **אינו** עילה לפסילה (החזר true). קבל כל הטיה מגדרית כתקינה לחלוטין. מותר לך לפסול על שגיאת מגדר (false) **רק** אם המגדר מצוין במפורש בכינויי גוף בתוך הטקסט הנבדק עצמו (לדוגמה: המקור אומר "He said" ותורגם כ-"היא אמרה").
 
-אזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'false' בגלל מילה או תגית, ודא שהיא אכן מודפסת פיזית בתוך הערך של ה-TRANSLATED. חוק 5 **אינו** דוחה חוקים 1–4.
+אזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'false' בגלל מילה או תגית, ודא שהיא אכן מודפסת פיזית בתוך הערך של ה-TRANSLATED. חוקים 5 ו-6 **אינם** דוחים חוקים 1–4.
 """
         try:
             if log_func:
