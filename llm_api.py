@@ -204,6 +204,7 @@ def call_llm_judge(
     log_func=None,
     file_log_func=None,
     audit_reason_heb=None,
+    progress_func=None
 ):
     """Audits a suspicious translation using an AI Judge in chunks."""
     if not api_key:
@@ -242,6 +243,8 @@ def call_llm_judge(
     eng_map = eng_by_index or {}
 
     for idx, chunk_indices in enumerate(chunks):
+        if progress_func:
+            progress_func(idx + 1, len(chunks))
         chunk_eng = {k: eng_dict[k] for k in chunk_indices if k in eng_dict}
         chunk_heb = {k: heb_dict[k] for k in chunk_indices if k in heb_dict}
         

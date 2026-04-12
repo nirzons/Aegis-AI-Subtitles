@@ -325,6 +325,9 @@ class TranslatorApp:
                 self.ui.widgets.lbl_timer.config(text="")
             elif type == "judge_start":
                 self.ui.widgets.lbl_status.config(text="⚖️ JUDGING...", fg="#9b59b6")
+            elif type == "judge_progress":
+                c, t = data
+                self.ui.widgets.lbl_status.config(text=f"⚖️ JUDGING {c}/{t}...", fg="#9b59b6")
             elif type == "judge_stop":
                 self.ui.widgets.lbl_status.config(text=f"📦 Size: {self.last_batch_size}", fg="#3498db")
             elif type == "batch_success": # I should add this signal to engine

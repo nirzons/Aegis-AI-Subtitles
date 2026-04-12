@@ -428,7 +428,8 @@ class TranslationEngine:
                                     heb_completed_by_index=translated_heb_by_index,
                                     log_func=lambda m: log(self.log_queue, session_log_file, m),
                                     file_log_func=lambda m: file_log(session_log_file, m),
-                                    audit_reason_heb=heb_audit_reason
+                                    audit_reason_heb=heb_audit_reason,
+                                    progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t)))
                                 )
                                 self.ui_queue.put(("judge_stop", None))
                                 

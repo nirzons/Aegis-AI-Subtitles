@@ -20,6 +20,12 @@ With the built-in **Live Viewer**, you can audit the translation process in real
 - **🩹 Self-Healing & Resilience**: Path-breaking schema inference that recovers translations from hallucinated JSON keys—optimized specifically for high-reasoning models like GPT-5/o1.
 - **💰 Cost-Optimized**: Native support for prompt caching (GPT-5, DeepSeek 90% discount) with real-time token tracking and hit-ratio logs.
 - **🔄 Hot Resume**: Seamlessly stop, tune parameters (batch sizes, models), and resume without losing session history.
+- **🚀 Flight Control Dashboard**: Real-time diagnostic header featuring:
+  - **⏱️ Live Response Timers**: Precise `M:SS` tracking for model deliberation.
+  - **📈 Linear Regression Estimation**: A "Clever Countdown" that learns from history to predict completion times.
+  - **🔄 Dual-Track Analytics**: Separate performance modeling for "New" vs "Retry" batches.
+  - **⚖️ Audit Progress**: Live chunk-tracking (e.g., `Judging 1/3...`) during the QA phase.
+  - **🔼 Adaptive Scaling**: Visual indicators for automatic batch-size growth or shrinking.
 - **📋 Clipboard Integration**: Instantly copy terminal output logs with a single button click in the main dashboard.
 - **🖥️ Local Model Support**: "Local" mode optimization for LM Studio and local LLMs, hiding internal magic cost values for a cleaner interface.
 

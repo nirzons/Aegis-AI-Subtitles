@@ -34,6 +34,23 @@ Manages persistent state across sessions. Supports dynamic model pricing and **C
 
 ---
 
+## 🚀 Diagnostics & Flight Control
+Aegis features a real-time dashboard that provides predictive insights into model behavior:
+
+### 1. Linear Regression Estimation
+The system utilizes a Least-Squares Regression model (`Time = b + a * size`) to predict batch end-times:
+- **`b` (Fixed Overhead)**: Accounts for network latency, prompt processing, and KV cache warm-up.
+- **`a` (Variable Rate)**: Calculates the exact seconds-per-line for the current model.
+- **Dynamic Fallbacks**: Automatically reverts to simple averages if the batch size remains constant (preventing zero-denominator errors).
+
+### 2. Dual-Track Analytics
+Performance data is split into **New** and **Retry** datasets. Since retries involve complex error-correction logic and longer prompt feedback, they are modeled separately to ensure accurate countdowns during difficult segments.
+
+### 3. Auditing Visibility
+The AI Judge broadcasts its internal chunking state. For large batches, the UI displays granular progress (e.g., `Judging 1/3...`) as the auditor traverses the batch, ensuring the user knows the application is active after the main model has returned.
+
+---
+
 ## 💾 Data & Persistence
 -   **Checkpoints (`.checkpoints/`)**: Every successful batch is saved to a JSON checkpoint, allowing the user to resume an interrupted project instantly.
 -   **Translations (`translated subtitles/`)**: Finalized `.srt` output files.
