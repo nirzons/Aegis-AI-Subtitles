@@ -318,10 +318,36 @@ class TranslationEngine:
 
                             cleaned_res = pre_repair_json(raw_res)
                             res_json = json.loads(cleaned_res)
+                            # Schema Recovery Layer: Handle GPT-5 key hallucinations
+                            if 'translated_srt' not in res_json:
+                                possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
+                                recovered = False
+                                for pk in possible_keys:
+                                    if pk in res_json and isinstance(res_json[pk], dict):
+                                        res_json['translated_srt'] = res_json[pk]
+                                        recovered = True
+                                        log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from hallucinated key: '{pk}'")
+                                        break
+                                
+                                if not recovered:
+                                    # Search for any dictionary that contains numeric keys
+                                    for key, value in res_json.items():
+                                        if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
+                                            res_json['translated_srt'] = value
+                                            recovered = True
+                                            log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from inferred dictionary: '{key}'")
+                                            break
+                                
+                                if not recovered:
+                                    # Last ditch: Check if the ROOT object itself has numeric keys
+                                    if any(str(k).isdigit() for k in res_json.keys()):
+                                        # To avoid losing the original structure if needed, wrap it
+                                        res_json = {'translated_srt': res_json}
+                                        recovered = True
+                                        log(self.log_queue, session_log_file, "   ↳ 💡 Recovered schema from root-level flat dictionary")
+
                             if 'translated_srt' not in res_json or not isinstance(res_json['translated_srt'], dict):
-                                last_judge_error = "שים לב: בפעם האחרונה שלחת JSON במבנה שגוי. חובה להחזיר את התרגומים בתוך המפתח 'translated_srt' ולא בשורש ה-JSON. היצמד בדיוק לתבנית שמופיעה בסוף ההוראות."
-                                last_judged_indices = set(indices)
-                                raise ValueError("Schema collapse: 'translated_srt' missing or invalid format")
+                                raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json.keys())}")
 
                             received_dict = res_json['translated_srt']
 
