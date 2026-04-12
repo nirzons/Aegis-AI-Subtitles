@@ -324,6 +324,12 @@ TRANSLATED (HEBREW):
             cleaned = pre_repair_json(raw_res)
             res_data = json.loads(cleaned)
             
+            j_discount = judge_model_cfg.get('cache_discount', 0.0)
+            hit_str = ""
+            if j_discount > 0 and in_tokens > 0:
+                hit_pct = (cached_tokens / in_tokens * 100)
+                hit_str = f" [Hit: {cached_tokens:,} ({hit_pct:.1f}%)]"
+
             if not res_data.get("is_valid", True):
                 is_overall_valid = False
                 err_map = res_data.get("error_map", {})
@@ -332,16 +338,16 @@ TRANSLATED (HEBREW):
                     reason = res_data.get("reason", "Unknown Audit Failure")
                     master_error_map[f"chunk_{idx+1}_general"] = f"[Chunk {idx+1}] {reason}"
                     if log_func:
-                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL — {reason}")
+                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}) — {reason}")
                 else:
                     master_error_map.update(err_map)
                     if log_func:
                         err_summary = "; ".join([f"{k}: {v}" for k, v in err_map.items()])
-                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL — {err_summary}")
+                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}) — {err_summary}")
                 return False, master_error_map, total_in, total_out, total_cached
             else:
                 if log_func:
-                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}/{len(chunks)}: PASS (In:{in_tokens:,} / Out:{out_tokens:,})")
+                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}/{len(chunks)}: PASS (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,})")
 
         except Exception as e:
             is_overall_valid = False
