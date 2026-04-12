@@ -294,12 +294,18 @@ class TranslationEngine:
                             raw_res, in_tokens, out_tokens, cached_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
                             
                             # MAIN MODEL Cost Calculation
-                            if model_cfg['provider'] == 'deepseek':
+                            discount = model_cfg.get('cache_discount', 0.0)
+                            
+                            if discount > 0 and in_tokens > 0:
                                 miss_tokens = in_tokens - cached_tokens
-                                cache_hit_price = model_cfg['input_price'] / 10
+                                # Calculate discounted price based on the percentage provided in settings
+                                cache_hit_price = model_cfg['input_price'] * (1 - (discount / 100.0))
                                 batch_cost = (miss_tokens / 1e6 * model_cfg['input_price']) + (cached_tokens / 1e6 * cache_hit_price) + (out_tokens / 1e6 * model_cfg['output_price'])
+                                hit_pct = (cached_tokens/in_tokens*100)
+                                hit_str = f" [Hit: {cached_tokens:,} ({hit_pct:.1f}%)]"
                             else:
                                 batch_cost = (in_tokens / 1e6 * model_cfg['input_price']) + (out_tokens / 1e6 * model_cfg['output_price'])
+                                hit_str = ""
                             
                             total_main_cost += batch_cost
                             
@@ -307,11 +313,6 @@ class TranslationEngine:
                             self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                             
                             # Immediate Terminal logging
-                            hit_str = ""
-                            if model_cfg['provider'] == 'deepseek' and in_tokens > 0:
-                                hit_pct = (cached_tokens / in_tokens) * 100
-                                hit_str = f" [Hit: {cached_tokens:,} ({hit_pct:.1f}%)]"
-                            
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
                             log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}) | Total Main: {fmt_val(total_main_cost)}")
 
@@ -399,9 +400,10 @@ class TranslationEngine:
                                 )
                                 
                                 # JUDGE Cost Calculation
-                                if judge_cfg['provider'] == 'deepseek':
+                                j_discount = judge_cfg.get('cache_discount', 0.0)
+                                if j_discount > 0 and j_cached > 0:
                                     j_miss = j_in - j_cached
-                                    j_hit_price = judge_cfg['input_price'] / 10
+                                    j_hit_price = judge_cfg['input_price'] * (1 - (j_discount / 100.0))
                                     j_cost = (j_miss / 1e6 * judge_cfg['input_price']) + (j_cached / 1e6 * j_hit_price) + (j_out / 1e6 * judge_cfg['output_price'])
                                 else:
                                     j_cost = (j_in / 1e6 * judge_cfg['input_price']) + (j_out / 1e6 * judge_cfg['output_price'])

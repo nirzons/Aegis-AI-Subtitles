@@ -61,16 +61,51 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
     
     elif model_cfg['provider'] == 'openai':
         client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=model_cfg['name'],
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=current_temp,
-            response_format={"type": "json_object"}
-        )
-        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, 0
+        current_temp = model_cfg.get('temperature', 0.0)
+        is_gpt5 = "gpt-5" in model_cfg['name'].lower()
+        
+        # GPT-5 / o1 reasoning models optimization: 
+        # 1. They often prefer system instructions inside the user message
+        # 2. They may not support or may hang with strict json_object response_format
+        if is_gpt5:
+            full_user_content = f"{system_prompt}\n\n### CURRENT TASK ###\n{user_prompt}"
+            req_params = {
+                "model": model_cfg['name'],
+                "messages": [
+                    {"role": "user", "content": full_user_content}
+                ]
+                # temperature is omitted as GPT-5/o1 usually only support the default (1.0)
+            }
+        else:
+            req_params = {
+                "model": model_cfg['name'],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": current_temp,
+                "response_format": {"type": "json_object"}
+            }
+            
+        response = client.chat.completions.create(**req_params)
+        
+        raw_content = response.choices[0].message.content
+        # Strip markdown if model added it
+        if "```json" in raw_content:
+            raw_content = raw_content.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw_content:
+            raw_content = raw_content.split("```")[1].split("```")[0].strip()
+
+        # Robust extraction for OpenAI/GPT-5 caching
+        cached_tokens = 0
+        usage = getattr(response, 'usage', None)
+        if usage:
+            # Check prompt_tokens_details.cached_tokens (standard for o1/gpt-4o)
+            details = getattr(usage, 'prompt_tokens_details', None)
+            if details:
+                cached_tokens = getattr(details, 'cached_tokens', 0) or 0
+        
+        return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens
 
     elif model_cfg['provider'] == 'deepseek':
         client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")

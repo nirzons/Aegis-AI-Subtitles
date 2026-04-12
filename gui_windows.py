@@ -18,6 +18,14 @@ class LiveViewer:
         self.top.title("Live Translation Viewer")
         self.top.geometry("1100x600")
         
+        # Top toolbar for controls
+        toolbar = ttk.Frame(self.top)
+        toolbar.pack(fill=tk.X, padx=10, pady=(10, 0))
+        
+        self.auto_scroll_var = tk.BooleanVar(value=False)
+        self.auto_scroll_cb = ttk.Checkbutton(toolbar, text="Auto Scroll", variable=self.auto_scroll_var)
+        self.auto_scroll_cb.pack(side=tk.LEFT)
+        
         frame = ttk.Frame(self.top)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -42,14 +50,17 @@ class LiveViewer:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         self.load_original()
+        self.initial_scroll_done = False
         self.update_translations()
         
     def parse_blocks(self, file_path):
         if not os.path.exists(file_path):
             return []
         try:
-            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                content = f.read().replace('\r\n', '\n')
+            # Use 'rb' and then decode to handle potential encoding issues with BOM
+            with open(file_path, 'rb') as f:
+                raw = f.read()
+                content = raw.decode('utf-8-sig').replace('\r\n', '\n')
             blocks = [b.strip() for b in content.split('\n\n') if b.strip()]
             parsed = []
             for b in blocks:
@@ -87,6 +98,8 @@ class LiveViewer:
             return
             
         trans_blocks = self.parse_blocks(self.trans_file)
+        last_updated_id = None
+        
         if trans_blocks:
             for b in trans_blocks:
                 idx = b["index"]
@@ -116,9 +129,36 @@ class LiveViewer:
                             time_val = old_values[1] if old_values and len(old_values) > 1 and old_values[1] else ""
                             
                             self.tree.item(item_ids[i], values=(idx_val, time_val, e_line, h_line))
+                            last_updated_id = item_ids[i]
                             
                         data["hebrew_lines"] = new_heb_lines
-                        
+
+        # Auto-scroll logic
+        if last_updated_id and not self.initial_scroll_done:
+            # We use a small delay to ensure the treeview has finished its layout
+            def do_initial_scroll():
+                children = self.tree.get_children()
+                try:
+                    idx = list(children).index(last_updated_id)
+                    # Use a moderate offset of 10 rows to bring the boundary to view
+                    target_idx = min(idx + 10, len(children) - 1)
+                    target_id = children[target_idx]
+                    self.tree.see(target_id)
+                except Exception:
+                    self.tree.see(last_updated_id)
+                self.tree.selection_set(last_updated_id)
+                self.initial_scroll_done = True
+            
+            self.top.after(100, do_initial_scroll)
+        elif last_updated_id and self.auto_scroll_var.get():
+            children = self.tree.get_children()
+            try:
+                idx = list(children).index(last_updated_id)
+                target_idx = min(idx + 10, len(children) - 1)
+                self.tree.see(children[target_idx])
+            except Exception:
+                self.tree.see(last_updated_id)
+                            
         self.top.after(3000, self.update_translations)
 
 
@@ -163,15 +203,22 @@ class SettingsWindow:
         frame_list = ttk.Frame(self.models_frame)
         frame_list.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        self.tree = ttk.Treeview(frame_list, columns=("ID", "Name", "Provider", "Batch"), show="headings", height=8)
+        self.tree = ttk.Treeview(frame_list, columns=("ID", "Name", "Provider", "Batch", "In", "Out", "Cache"), show="headings", height=8)
         self.tree.heading("ID", text="ID")
         self.tree.heading("Name", text="Model Name")
         self.tree.heading("Provider", text="Provider")
-        self.tree.heading("Batch", text="Batch Size")
+        self.tree.heading("Batch", text="Batch")
+        self.tree.heading("In", text="In $")
+        self.tree.heading("Out", text="Out $")
+        self.tree.heading("Cache", text="Cache %")
+        
         self.tree.column("ID", width=30, anchor=tk.CENTER)
-        self.tree.column("Name", width=150)
-        self.tree.column("Provider", width=100)
-        self.tree.column("Batch", width=70, anchor=tk.CENTER)
+        self.tree.column("Name", width=140)
+        self.tree.column("Provider", width=90)
+        self.tree.column("Batch", width=50, anchor=tk.CENTER)
+        self.tree.column("In", width=60, anchor=tk.CENTER)
+        self.tree.column("Out", width=60, anchor=tk.CENTER)
+        self.tree.column("Cache", width=60, anchor=tk.CENTER)
         
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.on_model_select)
@@ -192,7 +239,9 @@ class SettingsWindow:
             "batch_size": tk.StringVar(),
             "temperature": tk.StringVar(),
             "input_price": tk.StringVar(),
-            "output_price": tk.StringVar()
+            "output_price": tk.StringVar(),
+            "cache_discount": tk.StringVar(),
+            "is_local": tk.BooleanVar()
         }
         
         ttk.Label(form_frame, text="ID:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
@@ -207,13 +256,17 @@ class SettingsWindow:
         
         ttk.Label(form_frame, text="Temp:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         ttk.Entry(form_frame, textvariable=self.edit_vars["temperature"], width=10).grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-        ttk.Label(form_frame, text="Prices (In/Out):").grid(row=2, column=2, sticky=tk.W, padx=5, pady=2)
-        price_frame = ttk.Frame(form_frame)
-        price_frame.grid(row=2, column=3, sticky=tk.W, padx=5, pady=2)
-        ttk.Entry(price_frame, textvariable=self.edit_vars["input_price"], width=8).pack(side=tk.LEFT)
-        ttk.Entry(price_frame, textvariable=self.edit_vars["output_price"], width=8).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(form_frame, text="Save Model Configuration", command=self.save_model).grid(row=3, column=0, columnspan=4, pady=10)
+        ttk.Label(form_frame, text="In/Out/Cache%:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        price_frame = ttk.Frame(form_frame)
+        price_frame.grid(row=3, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(price_frame, textvariable=self.edit_vars["input_price"], width=7).pack(side=tk.LEFT)
+        self.output_entry = ttk.Entry(price_frame, textvariable=self.edit_vars["output_price"], width=7)
+        self.output_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Entry(price_frame, textvariable=self.edit_vars["cache_discount"], width=7).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(price_frame, text="Local", variable=self.edit_vars["is_local"]).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(form_frame, text="Save Model Configuration", command=self.save_model).grid(row=4, column=0, columnspan=4, pady=10)
         
         self.refresh_model_list()
         
@@ -221,7 +274,12 @@ class SettingsWindow:
         for item in self.tree.get_children():
             self.tree.delete(item)
         for k, v in SETTINGS.config["models"].items():
-            self.tree.insert("", tk.END, iid=k, values=(k, v.get("name",""), v.get("provider",""), v.get("batch_size","")))
+            out_p = v.get("output_price", 0)
+            if out_p == 1000000.0: out_p = 0.0
+            self.tree.insert("", tk.END, iid=k, values=(
+                k, v.get("name",""), v.get("provider",""), v.get("batch_size",""), 
+                v.get("input_price", 0), out_p, f"{int(v.get('cache_discount', 0))}%"
+            ))
             
     def on_model_select(self, event):
         selected = self.tree.selection()
@@ -234,7 +292,16 @@ class SettingsWindow:
         self.edit_vars["batch_size"].set(str(cfg.get("batch_size", "20")))
         self.edit_vars["temperature"].set(str(cfg.get("temperature", "0.0")))
         self.edit_vars["input_price"].set(str(cfg.get("input_price", "0.0")))
-        self.edit_vars["output_price"].set(str(cfg.get("output_price", "0.0")))
+        
+        o_price = cfg.get("output_price", 0.0)
+        if o_price == 1000000.0:
+            self.edit_vars["output_price"].set("0.0")
+            self.edit_vars["is_local"].set(True)
+        else:
+            self.edit_vars["output_price"].set(str(o_price))
+            self.edit_vars["is_local"].set(False)
+
+        self.edit_vars["cache_discount"].set(str(cfg.get("cache_discount", "0.0")))
         
     def new_model(self):
         existing_ids = [int(k) for k in SETTINGS.config["models"].keys() if k.isdigit()]
@@ -246,6 +313,8 @@ class SettingsWindow:
         self.edit_vars["temperature"].set("0.0")
         self.edit_vars["input_price"].set("0.0")
         self.edit_vars["output_price"].set("0.0")
+        self.edit_vars["cache_discount"].set("0.0")
+        self.edit_vars["is_local"].set(False)
         
     def delete_model(self):
         selected = self.tree.selection()
@@ -269,6 +338,10 @@ class SettingsWindow:
             temp = float(self.edit_vars["temperature"].get())
             iprice = float(self.edit_vars["input_price"].get())
             oprice = float(self.edit_vars["output_price"].get())
+            cdiscount = float(self.edit_vars["cache_discount"].get())
+            
+            if self.edit_vars["is_local"].get():
+                oprice = 1000000.0
         except ValueError:
             messagebox.showerror("Error", "Numeric fields must be valid numbers", parent=self.top)
             return
@@ -279,7 +352,8 @@ class SettingsWindow:
             "batch_size": batch,
             "temperature": temp,
             "input_price": iprice,
-            "output_price": oprice
+            "output_price": oprice,
+            "cache_discount": cdiscount
         }
         SETTINGS.save_settings()
         messagebox.showinfo("Saved", "Model saved successfully!", parent=self.top)
