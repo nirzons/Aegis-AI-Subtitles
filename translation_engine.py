@@ -427,12 +427,15 @@ class TranslationEngine:
                                 
                                 # JUDGE Cost Calculation
                                 j_discount = judge_cfg.get('cache_discount', 0.0)
-                                if j_discount > 0 and j_cached > 0:
+                                if j_discount > 0 and j_in > 0:
                                     j_miss = j_in - j_cached
                                     j_hit_price = judge_cfg['input_price'] * (1 - (j_discount / 100.0))
                                     j_cost = (j_miss / 1e6 * judge_cfg['input_price']) + (j_cached / 1e6 * j_hit_price) + (j_out / 1e6 * judge_cfg['output_price'])
+                                    j_hit_pct = (j_cached / j_in * 100)
+                                    j_hit_str = f" [Hit: {j_cached:,} ({j_hit_pct:.1f}%)]"
                                 else:
                                     j_cost = (j_in / 1e6 * judge_cfg['input_price']) + (j_out / 1e6 * judge_cfg['output_price'])
+                                    j_hit_str = ""
                                 
                                 total_judge_cost += j_cost
                                 
@@ -440,7 +443,7 @@ class TranslationEngine:
                                 self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                                 
                                 # Immediate Terminal logging
-                                log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,} / Out: {j_out:,}) | Total Judge: {fmt_val(total_judge_cost)}")
+                                log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}) | Total Judge: {fmt_val(total_judge_cost)}")
                                 file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,} | Total Judge Cost: ${total_judge_cost:.5f}")
 
                                 if not is_valid:
