@@ -38,6 +38,7 @@ class TranslatorApp:
         self.num_batches_processed = 0
         self.est_remaining = -1
         self.current_is_retry = False
+        self._timer_after_id = None
         
         # Directories
         self.curr_dir = os.getcwd()
@@ -261,6 +262,11 @@ class TranslatorApp:
             elif type == "eta":
                 self.ui.widgets.lbl_eta.config(text=f"ETA: {data[0]} | End: {data[1]}")
             elif type == "timer_start":
+                # Safety: Cancel any existing timer loop before starting a new one
+                if hasattr(self, '_timer_after_id') and self._timer_after_id:
+                    self.root.after_cancel(self._timer_after_id)
+                    self._timer_after_id = None
+
                 self.last_batch_size, self.current_is_retry = data
                 self.resp_timer_seconds = 0
                 
@@ -415,7 +421,7 @@ class TranslatorApp:
             tag = "🔄 RETRY " if getattr(self, 'current_is_retry', False) else ""
             est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
             self.ui.widgets.lbl_timer.config(text=f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
-            self.root.after(1000, self._tick_timer)
+            self._timer_after_id = self.root.after(1000, self._tick_timer)
 if __name__ == "__main__":
     root = tk.Tk()
     TranslatorApp(root)
