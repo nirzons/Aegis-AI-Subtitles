@@ -96,16 +96,22 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
         elif "```" in raw_content:
             raw_content = raw_content.split("```")[1].split("```")[0].strip()
 
-        # Robust extraction for OpenAI/GPT-5 caching
+        # Robust extraction for OpenAI/GPT-5 caching & reasoning
         cached_tokens = 0
+        reasoning_tokens = 0
         usage = getattr(response, 'usage', None)
         if usage:
-            # Check prompt_tokens_details.cached_tokens (standard for o1/gpt-4o)
-            details = getattr(usage, 'prompt_tokens_details', None)
-            if details:
-                cached_tokens = getattr(details, 'cached_tokens', 0) or 0
+            # 1. Prompt Caching
+            p_details = getattr(usage, 'prompt_tokens_details', None)
+            if p_details:
+                cached_tokens = getattr(p_details, 'cached_tokens', 0) or 0
+            
+            # 2. Reasoning (Brain Load)
+            c_details = getattr(usage, 'completion_tokens_details', None)
+            if c_details:
+                reasoning_tokens = getattr(c_details, 'reasoning_tokens', 0) or 0
         
-        return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens
+        return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens, reasoning_tokens
 
     elif model_cfg['provider'] == 'deepseek':
         client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
@@ -120,9 +126,15 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
         )
         usage_dict = response.usage.model_dump() if hasattr(response.usage, 'model_dump') else vars(response.usage)
         cached_tokens = usage_dict.get('prompt_cache_hit_tokens', 0)
-        if not cached_tokens and getattr(response.usage, 'prompt_tokens_details', None):
+        
+        # New robust details extraction for DeepSeek
+        reasoning_tokens = 0
+        if getattr(response.usage, 'prompt_tokens_details', None):
             cached_tokens = getattr(response.usage.prompt_tokens_details, 'cached_tokens', 0) or 0
-        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens
+        if getattr(response.usage, 'completion_tokens_details', None):
+            reasoning_tokens = getattr(response.usage.completion_tokens_details, 'reasoning_tokens', 0) or 0
+            
+        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens, reasoning_tokens
     
     elif model_cfg['provider'] == 'lmstudio':
         client = OpenAI(api_key=api_key, base_url="http://localhost:1234/v1", timeout=3600.0)
@@ -142,7 +154,7 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
             max_tokens=6144,
             response_format={"type": "text"}
         )
-        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, 0
+        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
 
 
 def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_lookup):
@@ -195,7 +207,7 @@ def call_llm_judge(
 ):
     """Audits a suspicious translation using an AI Judge in chunks."""
     if not api_key:
-        return True, "No API Key", 0, 0, 0
+        return True, "No API Key", 0, 0, 0, 0
     
     try:
         chunk_size = int(judge_batch_size)
@@ -214,7 +226,7 @@ def call_llm_judge(
   }
 }
 """
-    total_in, total_out, total_cached = 0, 0, 0
+    total_in, total_out, total_cached, total_reasoning = 0, 0, 0, 0
     master_error_map = {}
     is_overall_valid = True
 
@@ -312,7 +324,7 @@ TRANSLATED (HEBREW):
                 file_log_func(f"--- JUDGE CHUNK {idx+1} SYSTEM PROMPT START ---\n{system_prompt}\n--- JUDGE CHUNK {idx+1} SYSTEM PROMPT END ---")
                 file_log_func(f"--- JUDGE CHUNK {idx+1} USER PROMPT START ---\n{user_prompt}\n--- JUDGE CHUNK {idx+1} USER PROMPT END ---")
             
-            raw_res, in_tokens, out_tokens, cached_tokens = call_llm(judge_model_cfg, system_prompt, user_prompt, api_key)
+            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(judge_model_cfg, system_prompt, user_prompt, api_key)
             
             if file_log_func:
                 file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{raw_res}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
@@ -320,6 +332,7 @@ TRANSLATED (HEBREW):
             total_in += in_tokens
             total_out += out_tokens
             total_cached += cached_tokens
+            total_reasoning += reasoning_tokens
             
             cleaned = pre_repair_json(raw_res)
             res_data = json.loads(cleaned)
@@ -334,20 +347,28 @@ TRANSLATED (HEBREW):
                 is_overall_valid = False
                 err_map = res_data.get("error_map", {})
                 if not err_map:
+                    # brain load for chunk
+                    j_brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
+                    j_brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({j_brain_load:.1f}%)" if reasoning_tokens > 0 else ""
+
                     # fallback if model ignores schema
                     reason = res_data.get("reason", "Unknown Audit Failure")
                     master_error_map[f"chunk_{idx+1}_general"] = f"[Chunk {idx+1}] {reason}"
                     if log_func:
-                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}) — {reason}")
+                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str}) — {reason}")
                 else:
                     master_error_map.update(err_map)
                     if log_func:
                         err_summary = "; ".join([f"{k}: {v}" for k, v in err_map.items()])
-                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}) — {err_summary}")
-                return False, master_error_map, total_in, total_out, total_cached
+                        j_brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
+                        j_brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({j_brain_load:.1f}%)" if reasoning_tokens > 0 else ""
+                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str}) — {err_summary}")
+                return False, master_error_map, total_in, total_out, total_cached, total_reasoning
             else:
                 if log_func:
-                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}/{len(chunks)}: PASS (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,})")
+                    j_brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
+                    j_brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({j_brain_load:.1f}%)" if reasoning_tokens > 0 else ""
+                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}/{len(chunks)}: PASS (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str})")
 
         except Exception as e:
             is_overall_valid = False
@@ -356,5 +377,5 @@ TRANSLATED (HEBREW):
                 log_func(f"   ↳ ⚠️ Judge Chunk {idx+1}/{len(chunks)}: ERROR — {e}")
 
     if not is_overall_valid:
-        return False, master_error_map, total_in, total_out, total_cached
-    return True, {}, total_in, total_out, total_cached
+        return False, master_error_map, total_in, total_out, total_cached, total_reasoning
+    return True, {}, total_in, total_out, total_cached, total_reasoning

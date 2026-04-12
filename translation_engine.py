@@ -291,7 +291,7 @@ class TranslationEngine:
                         try:
                             log(self.log_queue, session_log_file, f"⏳ Sending Batch (Indices: {indices[0]}-{indices[-1]} | cues: {expected_count}, stride: {current_batch_size})...")
                             
-                            raw_res, in_tokens, out_tokens, cached_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
+                            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
                             
                             # MAIN MODEL Cost Calculation
                             discount = model_cfg.get('cache_discount', 0.0)
@@ -307,6 +307,9 @@ class TranslationEngine:
                                 batch_cost = (in_tokens / 1e6 * model_cfg['input_price']) + (out_tokens / 1e6 * model_cfg['output_price'])
                                 hit_str = ""
                             
+                            brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
+                            brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({brain_load:.1f}%)" if reasoning_tokens > 0 else ""
+
                             total_main_cost += batch_cost
                             
                             # Immediate GUI update
@@ -314,7 +317,7 @@ class TranslationEngine:
                             
                             # Immediate Terminal logging
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
-                            log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}) | Total Main: {fmt_val(total_main_cost)}")
+                            log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}{brain_str}) | Total Main: {fmt_val(total_main_cost)}")
 
                             cleaned_res = pre_repair_json(raw_res)
                             res_json = json.loads(cleaned_res)
@@ -414,7 +417,7 @@ class TranslationEngine:
                                 judge_api_key = config["judge_api_key"]
                                 judge_batch_size = config["judge_batch_size"]
                                 
-                                is_valid, judge_reason, j_in, j_out, j_cached = call_llm_judge(
+                                is_valid, judge_reason, j_in, j_out, j_cached, j_reasoning = call_llm_judge(
                                     judge_cfg, indices, input_payload, received_dict, judge_api_key,
                                     judge_batch_size=judge_batch_size,
                                     ordered_srt_indices=ordered_srt_indices,
@@ -437,14 +440,17 @@ class TranslationEngine:
                                     j_cost = (j_in / 1e6 * judge_cfg['input_price']) + (j_out / 1e6 * judge_cfg['output_price'])
                                     j_hit_str = ""
                                 
+                                j_brain_load = (j_reasoning / j_out * 100) if j_out > 0 else 0
+                                j_brain_str = f" | 🧠 Brain: {j_reasoning:,} ({j_brain_load:.1f}%)" if j_reasoning > 0 else ""
+
                                 total_judge_cost += j_cost
                                 
                                 # Immediate GUI update
                                 self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                                 
                                 # Immediate Terminal logging
-                                log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}) | Total Judge: {fmt_val(total_judge_cost)}")
-                                file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,} | Total Judge Cost: ${total_judge_cost:.5f}")
+                                log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}{j_brain_str}) | Total Judge: {fmt_val(total_judge_cost)}")
+                                file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,}{j_brain_str} | Total Judge Cost: ${total_judge_cost:.5f}")
 
                                 if not is_valid:
                                     # שמירת המשוב עבור הניסיון הבא בתוך הבאץ' הנוכחי
