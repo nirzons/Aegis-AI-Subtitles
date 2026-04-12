@@ -9,15 +9,30 @@ from llm_api import is_process_alive
 
 
 class LiveViewer:
-    def __init__(self, parent, orig_file, trans_file):
+    def __init__(self, parent, orig_file, trans_file, on_close=None):
         self.orig_file = orig_file
         self.trans_file = trans_file
         self.items_map = {}
+        self.on_close = on_close
         
         self.top = tk.Toplevel(parent)
         self.top.title("Live Translation Viewer")
         self.top.geometry("1100x600")
         
+        if self.on_close:
+            self.top.protocol("WM_DELETE_WINDOW", self._on_window_close)
+            
+        self._build_ui()
+        self.load_original()
+        self.initial_scroll_done = False
+        self.update_translations()
+
+    def _on_window_close(self):
+        if self.on_close:
+            self.on_close()
+        self.top.destroy()
+        
+    def _build_ui(self):
         # Top toolbar for controls
         toolbar = ttk.Frame(self.top)
         toolbar.pack(fill=tk.X, padx=10, pady=(10, 0))
@@ -48,11 +63,7 @@ class LiveViewer:
         
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        self.load_original()
-        self.initial_scroll_done = False
-        self.update_translations()
-        
+
     def parse_blocks(self, file_path):
         if not os.path.exists(file_path):
             return []

@@ -285,7 +285,13 @@ class TranslatorApp:
         if os.path.exists(path): subprocess.Popen(['notepad.exe', path])
     def open_translated_srt(self):
         if hasattr(self.engine, 'current_output_file') and self.engine.current_output_file:
-            LiveViewer(self.root, os.path.join(self.english_subs_dir, self.ui.widgets.srt_var.get()), self.engine.current_output_file)
+            path = os.path.join(self.english_subs_dir, self.ui.widgets.srt_var.get())
+            self.ui.widgets.btn_open_translated.config(state=tk.DISABLED)
+            
+            def re_enable():
+                self.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
+                
+            LiveViewer(self.root, path, self.engine.current_output_file, on_close=re_enable)
     def _apply_styles(self):
         style = ttk.Style()
         style.theme_use('clam')  # Allows much better customization than 'vista'
