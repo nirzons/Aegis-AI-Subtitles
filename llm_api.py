@@ -65,14 +65,14 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
         is_gpt5 = "gpt-5" in model_cfg['name'].lower()
         
         # GPT-5 / o1 reasoning models optimization: 
-        # 1. They often prefer system instructions inside the user message
-        # 2. They may not support or may hang with strict json_object response_format
+        # Use the 'developer' role which is the new standard for o1 models.
+        # This provides the best of both worlds: high-reasoning obedience and perfect caching.
         if is_gpt5:
-            full_user_content = f"{system_prompt}\n\n### CURRENT TASK ###\n{user_prompt}"
             req_params = {
                 "model": model_cfg['name'],
                 "messages": [
-                    {"role": "user", "content": full_user_content}
+                    {"role": "developer", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ]
                 # temperature is omitted as GPT-5/o1 usually only support the default (1.0)
             }

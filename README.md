@@ -17,10 +17,11 @@ With the built-in **Live Viewer**, you can audit the translation process in real
 - **🧠 Context-Aware Translation**: Processes subtitles in overlapping batches to maintain narrative continuity and tonal consistency.
 - **⚖️ AI Judge System**: A dedicated "Judge" model semantically verifies suspicious translations, detecting hallucinations, omissions, and cultural nuances.
 - **🛡️ Forensic Auditor**: A high-speed heuristic scanner that enforces strict SDH removal, RTL formatting, and dynamic speaker name deletion via `.sysprm` config.
-- **🩹 Self-Healing Engine**: Automatically detects batch failures and dynamically adjusts its stride (batch size) to recover and provide the best result.
+- **🩹 Self-Healing & Resilience**: Path-breaking schema inference that recovers translations from hallucinated JSON keys—optimized specifically for high-reasoning models like GPT-5/o1.
+- **💰 Cost-Optimized**: Native support for prompt caching (GPT-5, DeepSeek 90% discount) with real-time token tracking and hit-ratio logs.
 - **🔄 Hot Resume**: Seamlessly stop, tune parameters (batch sizes, models), and resume without losing session history.
 - **📋 Clipboard Integration**: Instantly copy terminal output logs with a single button click in the main dashboard.
-- **💰 Cost-Optimized**: Fully utilizes prompt caching and token tracking for maximum efficiency.
+- **🖥️ Local Model Support**: "Local" mode optimization for LM Studio and local LLMs, hiding internal magic cost values for a cleaner interface.
 
 ---
 
@@ -36,34 +37,34 @@ You can install all dependencies with a single command:
 pip install -r requirements.txt
 ```
 
-*Note: All other modules used (os, tkinter, json, etc.) are part of the Python Standard Library, making Aegis highly portable and lightweight.*
-
 ---
 
 ## 🛠️ Installation & Usage
 
 ### Prerequisites
 - Python 3.10+
-- A valid API key for OpenAI, DeepSeek, or Google Gemini (configured via the UI).
+- A valid API key for OpenAI, DeepSeek, or Google Gemini.
 
 ### Quick Start
 1. Clone the repository.
-2. **Setup Directories**: Ensure you have the following folders in the root (most are created automatically on launch):
+2. **Setup Directories**:
    - `English subtitles/`: Place your source `.srt` files here.
-   - `sysprm files/`: Place your project instructions here (an example `survivor_45_hebrew.sysprm` is provided).
+   - `sysprm files/`: Place your project instructions here (e.g., `survivor_45_hebrew.sysprm`).
 3. **Run Application**:
    ```bash
    python translator_ai.pyw
    ```
-4. **Configuration (First Launch)**: 
-   - You don't need to set up Environment Variables! 
-   - Click the **⚙️ Settings** button in the dashboard to enter your API keys for OpenAI, DeepSeek, or Google Gemini directly in the UI.
-5. **Translate**: Select your `.srt` and `.sysprm` profile from the dashboard and hit **Start Translation**.
+4. **Configuration**: Click the **⚙️ Settings** button to enter API keys and manage model parameters directly in the UI.
 
 ---
 
-## 📖 Documentation
-For a deep dive into the technical architecture, heuristic rules, and the multi-layer validation loop, see the [System Overview](system_overview.md).
+## 📖 Under the Hood
 
-## 📄 License
-MIT License - Created with precision for the subtitle translation community.
+### 1. The Context Layer
+Aegis doesn't translate in a vacuum. It maintains a rolling history of the "Story So Far," including character bios, current setting, and immediate preceding dialogue to prevent gender-flips and continuity errors.
+
+### 2. The Heuristic Shield
+A deterministic auditor that runs before any AI check. It instantly catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long for subtitle screens, triggering an immediate retry before wasting tokens on an AI Judge.
+
+### 3. Reasoner Optimization
+Specialized handling for "Reasoning" models (GPT-5/o1). Aegis utilizes the `developer` role to isolate instructions from content, ensuring **90%+ cache hit ratios** and preventing "Schema Collapse" even when the model goes off-script.
