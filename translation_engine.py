@@ -290,8 +290,10 @@ class TranslationEngine:
                         _batch_user_prompt = final_prompt
                         try:
                             log(self.log_queue, session_log_file, f"⏳ Sending Batch (Indices: {indices[0]}-{indices[-1]} | cues: {expected_count}, stride: {current_batch_size})...")
-                            
+                            is_retry = (len(attempted_strides) > 1)
+                            self.ui_queue.put(("timer_start", (expected_count, is_retry)))
                             raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
+                            self.ui_queue.put(("timer_stop", None))
                             
                             # MAIN MODEL Cost Calculation
                             discount = model_cfg.get('cache_discount', 0.0)
@@ -412,6 +414,7 @@ class TranslationEngine:
                                     raise ValueError(f"Heuristic Rejection (skip judge): {audit_reason}")
 
                                 log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Calling Judge...")
+                                self.ui_queue.put(("judge_start", None))
                                 
                                 judge_cfg = config["judge_cfg"]
                                 judge_api_key = config["judge_api_key"]
@@ -427,6 +430,7 @@ class TranslationEngine:
                                     file_log_func=lambda m: file_log(session_log_file, m),
                                     audit_reason_heb=heb_audit_reason
                                 )
+                                self.ui_queue.put(("judge_stop", None))
                                 
                                 # JUDGE Cost Calculation
                                 j_discount = judge_cfg.get('cache_discount', 0.0)
@@ -483,6 +487,7 @@ class TranslationEngine:
                             processed += expected_count 
                             session_processed += expected_count
                             batch_success = True
+                            self.ui_queue.put(("batch_success", None))
                             
                             log(self.log_queue, session_log_file, f"✅ Batch {indices[0]}-{indices[-1]} saved successfully.")
                             last_judge_error = ""

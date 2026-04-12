@@ -117,6 +117,12 @@ class MainUILayout:
         tk.Label(term_header, text=" 💻 TERMINAL OUTPUT ", font=("Segoe UI", 10, "bold"), fg="#2c3e50", bg=self.root["bg"]).pack(side=tk.LEFT)
         self.widgets.btn_copy = ttk.Button(term_header, text="📋 Copy Logs", width=15, command=app.copy_logs_to_clipboard)
         self.widgets.btn_copy.pack(side=tk.LEFT, padx=10)
+        
+        self.widgets.lbl_timer = tk.Label(term_header, text="", font=("Segoe UI", 10, "bold"), fg="#e67e22", bg=self.root["bg"])
+        self.widgets.lbl_timer.pack(side=tk.RIGHT, padx=15)
+        
+        self.widgets.lbl_status = tk.Label(term_header, text="", font=("Segoe UI", 10, "bold"), fg="#3498db", bg=self.root["bg"])
+        self.widgets.lbl_status.pack(side=tk.RIGHT, padx=5)
 
         term_frame = ttk.LabelFrame(self.root, labelwidget=term_header)
         term_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)

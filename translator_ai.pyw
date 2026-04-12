@@ -30,6 +30,14 @@ class TranslatorApp:
         self.log_queue = queue.Queue()
         self.ui_queue = queue.Queue()
         self.is_running = False
+        self.resp_timer_seconds = -1
+        self.perf_history_new = []
+        self.perf_history_retry = []
+        self.last_batch_size = 0
+        self.previous_batch_size = -1
+        self.num_batches_processed = 0
+        self.est_remaining = -1
+        self.current_is_retry = False
         
         # Directories
         self.curr_dir = os.getcwd()
@@ -252,10 +260,74 @@ class TranslatorApp:
                 self.ui.widgets.lbl_progress.config(text=f"Progress: {p}/{t} ({(p/t*100) if t else 0:.1f}%)")
             elif type == "eta":
                 self.ui.widgets.lbl_eta.config(text=f"ETA: {data[0]} | End: {data[1]}")
+            elif type == "timer_start":
+                self.last_batch_size, self.current_is_retry = data
+                self.resp_timer_seconds = 0
+                
+                # Batch Size Change detection
+                arrow = ""
+                if self.num_batches_processed > 0 and self.previous_batch_size > 0:
+                    if self.last_batch_size > self.previous_batch_size: arrow = " 🔼"
+                    elif self.last_batch_size < self.previous_batch_size: arrow = " 🔽"
+                
+                self.ui.widgets.lbl_status.config(text=f"📦 Size: {self.last_batch_size}{arrow}")
+
+                # Choose history based on retry status
+                history = self.perf_history_new
+                if self.current_is_retry:
+                    if len(self.perf_history_retry) >= 2 or (len(self.perf_history_retry) == 1 and len(self.perf_history_new) == 0):
+                        history = self.perf_history_retry
+                    else:
+                        history = self.perf_history_new
+
+                # Calculate estimation
+                self.est_remaining = -1
+                n = len(history)
+                if n >= 2:
+                    sum_x = sum(h[1] for h in history)
+                    sum_y = sum(h[0] for h in history)
+                    sum_xy = sum(h[0] * h[1] for h in history)
+                    sum_x2 = sum(h[1]**2 for h in history)
+                    denominator = (n * sum_x2 - sum_x**2)
+                    if denominator != 0:
+                        a = (n * sum_xy - sum_x * sum_y) / denominator
+                        b = (sum_y - a * sum_x) / n
+                        a = max(0.1, a) 
+                        self.est_remaining = int(max(5, b + a * self.last_batch_size))
+                    else:
+                        avg_sec = sum_y / sum_x
+                        self.est_remaining = int(avg_sec * self.last_batch_size)
+                elif n == 1:
+                    avg_sec = history[0][0] / history[0][1]
+                    self.est_remaining = int(avg_sec * self.last_batch_size)
+                
+                est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining > 0 else ""
+                tag = "🔄 RETRY " if self.current_is_retry else ""
+                self.ui.widgets.lbl_timer.config(text=f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
+                self._tick_timer()
+            elif type == "timer_stop":
+                if self.resp_timer_seconds > 0 and hasattr(self, 'last_batch_size'):
+                    if getattr(self, 'current_is_retry', False):
+                        self.perf_history_retry.append((self.resp_timer_seconds, self.last_batch_size))
+                    else:
+                        self.perf_history_new.append((self.resp_timer_seconds, self.last_batch_size))
+                    
+                    self.previous_batch_size = self.last_batch_size
+                    self.num_batches_processed += 1
+
+                self.resp_timer_seconds = -1
+                self.ui.widgets.lbl_timer.config(text="")
+            elif type == "judge_start":
+                self.ui.widgets.lbl_status.config(text="⚖️ JUDGING...", fg="#9b59b6")
+            elif type == "judge_stop":
+                self.ui.widgets.lbl_status.config(text=f"📦 Size: {self.last_batch_size}", fg="#3498db")
+            elif type == "batch_success": # I should add this signal to engine
+                self.ui.widgets.lbl_status.config(text="")
             elif type == "cost":
                 self.ui.widgets.lbl_cost.config(text=format_cost_display(data[0], data[1]))
             elif type == "finished":
                 self.is_running = False
+                self.resp_timer_seconds = -1
                 self._toggle_ui_state(tk.NORMAL)
             elif type == "refresh":
                 self.refresh_files()
@@ -327,6 +399,23 @@ class TranslatorApp:
         self.root.clipboard_append(self.ui.widgets.log_text.get(1.0, tk.END))
         messagebox.showinfo("Copied", "Terminal logs copied!")
 
+
+    def _fmt_seconds(self, s):
+        if s < 0: return "?"
+        m = s // 60
+        sec = s % 60
+        return f"{m}:{sec:02d}"
+
+    def _tick_timer(self):
+        if self.resp_timer_seconds >= 0:
+            self.resp_timer_seconds += 1
+            if self.est_remaining > 0:
+                self.est_remaining -= 1
+            
+            tag = "🔄 RETRY " if getattr(self, 'current_is_retry', False) else ""
+            est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
+            self.ui.widgets.lbl_timer.config(text=f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
+            self.root.after(1000, self._tick_timer)
 if __name__ == "__main__":
     root = tk.Tk()
     TranslatorApp(root)
