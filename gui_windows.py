@@ -22,7 +22,7 @@ class LiveViewer:
         toolbar = ttk.Frame(self.top)
         toolbar.pack(fill=tk.X, padx=10, pady=(10, 0))
         
-        self.auto_scroll_var = tk.BooleanVar(value=False)
+        self.auto_scroll_var = tk.BooleanVar(value=True)
         self.auto_scroll_cb = ttk.Checkbutton(toolbar, text="Auto Scroll", variable=self.auto_scroll_var)
         self.auto_scroll_cb.pack(side=tk.LEFT)
         
