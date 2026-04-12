@@ -135,6 +135,7 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
                 has_expansion_anomaly = True
             elif block_ratio > 1.5:
                 reasons.append(f"High expansion at index {idx} ({block_ratio:.1f}x)")
+                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום ארוך יחסית למקור ({block_ratio:.1f}x). נסה לנסח בצורה תמציתית יותר מבלי לאבד מידע מהותי.")
             elif block_ratio < 0.4 and eng_wc >= 4:
                 reasons.append(f"Extreme omission at index {idx} ({block_ratio:.1f}x)")
                 heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום קצר ביחס לאורך המקור. ודא שלא הושמט מידע מהותי. אזהרה: אל תתרגם מילולית בראשך! זכור שביטויים באנגלית (כמו 'vote out') מתורגמים לעיתים קרובות למילה אחת בלבד (כמו 'הדחה') בהתאם למילון המונחים. אם הרעיון הכללי נשמר בהצלחה בצורה תמציתית - באחריותך להתעלם מההתרעה ולאשר (true).")

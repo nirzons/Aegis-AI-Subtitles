@@ -458,8 +458,27 @@ class TranslationEngine:
                                 file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,}{j_brain_str} | Total Judge Cost: ${total_judge_cost:.5f}")
 
                                 if not is_valid:
-                                    # שמירת המשוב עבור הניסיון הבא בתוך הבאץ' הנוכחי
-                                    last_judge_error = judge_reason
+                                    if judge_reason == "FAILED":
+                                        # Judge itself errored — declare ruling as FAILED and use auditor output as retry feedback
+                                        log(self.log_queue, session_log_file, "   ↳ ❌ Judge ruling: FAILED (judge error). Retrying with auditor feedback.")
+                                        parsed_audit_map = {}
+                                        for p in heb_audit_reason.split("; "):
+                                            if "|" in p:
+                                                scope, msg = p.split("|", 1)
+                                                if scope.startswith("IDX:"):
+                                                    idx_list = scope[4:].split(",")
+                                                    for idx_val in idx_list:
+                                                        parsed_audit_map[idx_val] = parsed_audit_map.get(idx_val, "") + msg + " "
+                                                else:
+                                                    parsed_audit_map["GLOBAL"] = parsed_audit_map.get("GLOBAL", "") + msg + " "
+                                            else:
+                                                if p.strip():
+                                                    parsed_audit_map["GENERAL"] = parsed_audit_map.get("GENERAL", "") + p + " "
+                                        parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
+                                        last_judge_error = parsed_audit_map
+                                    else:
+                                        # Normal judge rejection — use judge's error map as feedback
+                                        last_judge_error = judge_reason
                                     last_judged_indices = set(indices)
                                     raise ValueError("Judge Rejection")
                                 else:

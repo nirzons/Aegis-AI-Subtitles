@@ -374,10 +374,10 @@ TRANSLATED (HEBREW):
                     log_func(f"   ↳ ✅ Judge Chunk {idx+1}/{len(chunks)}: PASS (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str})")
 
         except Exception as e:
-            is_overall_valid = False
-            master_error_map[f"chunk_{idx+1}_error"] = f"Judge Error in Chunk {idx+1}: {e}"
             if log_func:
-                log_func(f"   ↳ ⚠️ Judge Chunk {idx+1}/{len(chunks)}: ERROR — {e}")
+                log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: ERROR — {e}")
+            # Judge itself failed — return sentinel so caller falls back to auditor feedback
+            return False, "FAILED", total_in, total_out, total_cached, total_reasoning
 
     if not is_overall_valid:
         return False, master_error_map, total_in, total_out, total_cached, total_reasoning
