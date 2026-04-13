@@ -91,23 +91,55 @@ class TranslationEngine:
                 lines = f.readlines()
             clean_lines = [line for line in lines if not line.strip().startswith("//")]
             raw_sysprm = "".join(clean_lines).strip()
-            parts = [p.strip() for p in raw_sysprm.split("===")]    
             
-            if len(parts) >= 2:
-                initial_context_str = parts[0]
-                series_context = parts[1]
-                if not resume_mode: log(self.log_queue, session_log_file, "✅ Loaded project-specific context from sysprm.")
+            if "===" in raw_sysprm:
+                parts = [p.strip() for p in raw_sysprm.split("===")]
+                initial_context_str = parts[0] if len(parts) >= 2 else "{}"
+                series_context = parts[1] if len(parts) >= 2 else parts[0]
+                prompt_prefix = ""
             else:
-                initial_context_str = "{}"
-                series_context = parts[0]
-                
-            system_prompt = f"""
-{GLOBAL_SYSTEM_INSTRUCTIONS}
+                try:
+                    sysprm_json = json.loads(raw_sysprm)
+                    prompt_prefix = sysprm_json.get("prompt_prefix", "")
+                    if "series_context_lines" in sysprm_json:
+                        series_context = "\n".join(sysprm_json["series_context_lines"])
+                    else:
+                        series_context = sysprm_json.get("series_context", "")
+                        
+                    initial_context_dict = {k: v for k, v in sysprm_json.items() if k not in ["prompt_prefix", "series_context", "series_context_lines"]}
+                    initial_context_str = json.dumps(initial_context_dict, ensure_ascii=False)
+                except json.JSONDecodeError as e:
+                    self.log_queue.put(f"⚠️ Error parsing sysprm JSON: {e}")
+                    initial_context_str = "{}"
+                    prompt_prefix = ""
+                    series_context = raw_sysprm
 
-{series_context}
+            if not resume_mode: log(self.log_queue, session_log_file, "✅ Loaded project-specific context from sysprm.")
 
-{GLOBAL_TECHNICAL_RULES}
-"""
+            # Calculate dynamic serial indexes based on the project sysprm context
+            import re
+            last_idx = 0
+            if series_context:
+                matches = re.findall(r'###\s*(\d+)\.', series_context)
+                if matches:
+                    last_idx = max([int(m) for m in matches])
+            
+            idx_workflow = last_idx + 1
+            idx_tech = idx_workflow + 1
+            idx_clean = idx_tech + 1
+            
+            sys_inst = GLOBAL_SYSTEM_INSTRUCTIONS.replace("[IDX_WORKFLOW]", str(idx_workflow))
+            tech_rules = GLOBAL_TECHNICAL_RULES.replace("[IDX_TECH]", str(idx_tech)).replace("[IDX_CLEAN]", str(idx_clean))
+
+            system_prompt_parts = []
+            if prompt_prefix:
+                system_prompt_parts.append(prompt_prefix)
+            if series_context:
+                system_prompt_parts.append(series_context.strip())
+            system_prompt_parts.append(sys_inst.strip())
+            system_prompt_parts.append(tech_rules.strip())
+            
+            system_prompt = "\n\n".join(system_prompt_parts) + "\n"
                 
             if not resume_mode:
                 try:

@@ -67,7 +67,7 @@ pip install -r requirements.txt
 ## 📖 Under the Hood
 
 ### 1. The Context Layer
-Aegis doesn't translate in a vacuum. It maintains a rolling history of the "Story So Far," including character bios, current setting, and immediate preceding dialogue to prevent gender-flips and continuity errors.
+Aegis doesn't translate in a vacuum. It maintains a rolling history of the "Story So Far," including character bios, current setting, and immediate preceding dialogue to prevent gender-flips and continuity errors. Furthermore, it employs a **Dynamic Prompt Architecture** that automatically synchronizes project-specific custom `.sysprm` dictionaries with global rules, creating a seamlessly numbered instruction set that maximizes LLM adherence.
 
 ### 2. The Heuristic Shield
 A deterministic auditor that runs before any AI check. It instantly catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long for subtitle screens, triggering an immediate retry before wasting tokens on an AI Judge.

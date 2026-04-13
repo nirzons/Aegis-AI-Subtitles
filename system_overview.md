@@ -54,7 +54,7 @@ The AI Judge broadcasts its internal chunking state. For large batches, the UI d
 ## 💾 Data & Persistence
 -   **Checkpoints (`.checkpoints/`)**: Every successful batch is saved to a JSON checkpoint, allowing the user to resume an interrupted project instantly.
 -   **Translations (`translated subtitles/`)**: Finalized `.srt` output files.
--   **System Prompts (`sysprm files/`)**: Project-specific knowledge bases and "Rules of Engagement" for the AI.
+-   **System Prompts (`sysprm files/`)**: Project-specific knowledge bases. Supports seamless custom section sizes by utilizing a dynamic indexing engine (automatically scaling global workflow rules 1,2,3... exactly where your specific variables end) to maintain sequence structure for LLMs.
 
 ---
 
