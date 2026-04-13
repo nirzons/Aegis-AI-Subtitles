@@ -9,6 +9,9 @@ from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_mu
 from llm_api import call_llm, call_llm_judge
 from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text
 
+from translation_stats import _inc_by_size, make_stats, print_stats
+
+
 class TranslationEngine:
     def __init__(self, log_queue, ui_queue):
         self.log_queue = log_queue
@@ -157,7 +160,18 @@ class TranslationEngine:
                 override_msg = ""
             
             effective_batch_size = max(2, effective_batch_size)
-            
+
+            # ── Stats initialization ──────────────────────────────────────
+            if resume_mode:
+                stats = make_stats(resume_from=checkpoint_data.get("stats"))
+            else:
+                stats = make_stats()
+
+            # Capture elapsed time accumulated in previous sessions
+            elapsed_at_session_start = stats["total_elapsed_seconds"]
+            session_start_time = time.time()
+            # ─────────────────────────────────────────────────────────────
+
             start_time = time.time()
             session_processed = 0
             success_streak = 0
@@ -190,6 +204,7 @@ class TranslationEngine:
                     last_judged_indices = set() # האינדקסים שהיו בתוך ה-Chunk שנפסל
                     while not batch_success and not self.should_stop:
                         batch_diagnostics_logged = False
+                        this_attempt_auditor_flagged = False  # reset each attempt
                         attempted_strides.append(current_batch_size)
                         start_idx = current_index
                         end_idx = min(current_index + current_batch_size, total_blocks)
@@ -292,7 +307,24 @@ class TranslationEngine:
                             log(self.log_queue, session_log_file, f"⏳ Sending Batch (Indices: {indices[0]}-{indices[-1]} | cues: {expected_count}, stride: {current_batch_size})...")
                             is_retry = (len(attempted_strides) > 1)
                             self.ui_queue.put(("timer_start", (expected_count, is_retry)))
+
+                            # ── Track attempt ──────────────────────────────
+                            stats["total_batches_attempted"] += 1
+                            if is_retry:
+                                stats["total_retries"] += 1
+                            batch_call_start = time.time()
+                            # ──────────────────────────────────────────────
+
                             raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
+
+                            # ── Record LLM call duration ───────────────────
+                            _call_duration = time.time() - batch_call_start
+                            if is_retry:
+                                stats["llm_call_times_retry"].append((_call_duration, current_batch_size))
+                            else:
+                                stats["llm_call_times_new"].append((_call_duration, current_batch_size))
+                            # ──────────────────────────────────────────────
+
                             self.ui_queue.put(("timer_stop", None))
                             
                             # MAIN MODEL Cost Calculation
@@ -322,11 +354,16 @@ class TranslationEngine:
                             log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}{brain_str}) | Total Main: {fmt_val(total_main_cost)}")
 
                             cleaned_res = pre_repair_json(raw_res)
-                            res_json = json.loads(cleaned_res)
+                            try:
+                                res_json = json.loads(cleaned_res)
+                            except json.JSONDecodeError:
+                                _inc_by_size(stats["json_parse_errors"], current_batch_size)
+                                raise
+
                             # Schema Recovery Layer: Handle GPT-5 key hallucinations
+                            recovered = False
                             if 'translated_srt' not in res_json:
                                 possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
-                                recovered = False
                                 for pk in possible_keys:
                                     if pk in res_json and isinstance(res_json[pk], dict):
                                         res_json['translated_srt'] = res_json[pk]
@@ -351,6 +388,9 @@ class TranslationEngine:
                                         recovered = True
                                         log(self.log_queue, session_log_file, "   ↳ 💡 Recovered schema from root-level flat dictionary")
 
+                                if recovered:
+                                    stats["schema_recoveries"] += 1  # track successful recovery
+
                             if 'translated_srt' not in res_json or not isinstance(res_json['translated_srt'], dict):
                                 raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json.keys())}")
 
@@ -371,6 +411,7 @@ class TranslationEngine:
                             # הדפסת לוג רק אם היו תיקונים
                             if changes_detected:
                                 log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Fixed escaped line breaks in indices: {', '.join(changes_detected)}")
+                                stats["sanitizer_fixes"] += 1
 
                             for idx in indices:
                                 if idx not in received_dict:
@@ -382,6 +423,8 @@ class TranslationEngine:
                             is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels)
                             
                             if is_suspicious:
+                                this_attempt_auditor_flagged = True  # mark for clean-pass tracking
+
                                 if not batch_diagnostics_logged:
                                     file_log(session_log_file, f"--- BATCH {indices[0] if indices else '?'}-{indices[-1] if indices else '?'} DIAGNOSTICS (PRIMARY) ---")
                                     file_log(session_log_file, f"SYSTEM PROMPT:\n{_batch_system_prompt}")
@@ -410,9 +453,11 @@ class TranslationEngine:
                                     parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
                                     last_judge_error = parsed_audit_map
                                     last_judged_indices = set(indices)
+                                    _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
                                     log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
                                     raise ValueError(f"Heuristic Rejection (skip judge): {audit_reason}")
 
+                                _inc_by_size(stats["auditor_sent_to_judge"], current_batch_size)
                                 log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Calling Judge...")
                                 self.ui_queue.put(("judge_start", None))
                                 
@@ -432,6 +477,10 @@ class TranslationEngine:
                                     progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t)))
                                 )
                                 self.ui_queue.put(("judge_stop", None))
+
+                                # ── Track judge activity ───────────────────
+                                _inc_by_size(stats["judge_invocations"], current_batch_size)
+                                # ──────────────────────────────────────────
                                 
                                 # JUDGE Cost Calculation
                                 j_discount = judge_cfg.get('cache_discount', 0.0)
@@ -476,14 +525,18 @@ class TranslationEngine:
                                                     parsed_audit_map["GENERAL"] = parsed_audit_map.get("GENERAL", "") + p + " "
                                         parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
                                         last_judge_error = parsed_audit_map
+                                        _inc_by_size(stats["judge_failed_errors"], current_batch_size)
                                     else:
                                         # Normal judge rejection — use judge's error map as feedback
                                         last_judge_error = judge_reason
+                                        _inc_by_size(stats["judge_rejections"], current_batch_size)
                                     last_judged_indices = set(indices)
                                     raise ValueError("Judge Rejection")
                                 else:
                                     last_judge_error = ""
                                     last_judged_indices = set()
+                                    _inc_by_size(stats["judge_approvals"], current_batch_size)
+                                    _inc_by_size(stats["judge_approved_passes_by_size"], current_batch_size)
                                     msg = f"✅ Judge Approved: {judge_reason}" if judge_reason and judge_reason != {} else "✅ Judge Approved"
                                     log(self.log_queue, session_log_file, msg)
 
@@ -507,6 +560,13 @@ class TranslationEngine:
                             processed += expected_count 
                             session_processed += expected_count
                             batch_success = True
+
+                            # ── Batch success tracking ─────────────────────
+                            stats["total_batches_succeeded"] += 1
+                            if len(attempted_strides) == 1 and not this_attempt_auditor_flagged:
+                                _inc_by_size(stats["clean_passes_by_size"], current_batch_size)
+                            # ──────────────────────────────────────────────
+
                             self.ui_queue.put(("batch_success", None))
                             
                             log(self.log_queue, session_log_file, f"✅ Batch {indices[0]}-{indices[-1]} saved successfully.")
@@ -548,6 +608,7 @@ class TranslationEngine:
                                     failures_at_current_stride = 0
                                     reduce_by = max(3, current_batch_size // 6)
                                     current_batch_size = max(2, current_batch_size - reduce_by)
+                                    stats["batch_shrink_events"] += 1
                                     log(self.log_queue, session_log_file, f"📉 Second failure at this stride; reducing by {reduce_by} → {current_batch_size} and retrying...")
 
                     if batch_success:
@@ -564,6 +625,7 @@ class TranslationEngine:
                             #climb_amount = max(5, (batch_size - effective_batch_size) // 2)
                             climb_amount = 8
                             effective_batch_size = min(batch_size, effective_batch_size + climb_amount)
+                            stats["batch_grow_events"] += 1
                             log(self.log_queue, session_log_file, f"📈 Success streak {success_streak}: Climbing up → {effective_batch_size}")
                             success_streak = 0 # Reset streak to stabilize at new size
                         elif len(attempted_strides) >= 2:
@@ -573,7 +635,10 @@ class TranslationEngine:
                             effective_batch_size = current_batch_size
                         if effective_batch_size != prev_effective:
                             log(self.log_queue, session_log_file, f"📌 Effective batch size → {effective_batch_size} (penultimate stride after retries; following chunks start here)")
-                        current_index += expected_count 
+                        current_index += expected_count
+
+                        # ── Update accumulated elapsed time & write checkpoint ─
+                        stats["total_elapsed_seconds"] = elapsed_at_session_start + (time.time() - session_start_time)
                         checkpoint_data = {
                             "pid": os.getpid(),
                             "model_choice": config["model_choice"],
@@ -589,7 +654,8 @@ class TranslationEngine:
                             "total_blocks": total_blocks,
                             "total_main_cost": total_main_cost,
                             "total_judge_cost": total_judge_cost,
-                            "context_state": context_state
+                            "context_state": context_state,
+                            "stats": stats,
                         }
                         with open(current_checkpoint_file, 'w', encoding='utf-8') as ckpt_f:
                             json.dump(checkpoint_data, ckpt_f, ensure_ascii=False, indent=4)
@@ -603,6 +669,26 @@ class TranslationEngine:
             if not self.should_stop:
                 log(self.log_queue, session_log_file, f"\n✅ Translation Complete!")
                 log(self.log_queue, session_log_file, f"📂 Output saved to: {output_file}")
+
+                # ── Finalize elapsed and print stats ──────────────────────
+                stats["total_elapsed_seconds"] = elapsed_at_session_start + (time.time() - session_start_time)
+                print_stats(
+                    stats=stats,
+                    total_blocks=total_blocks,
+                    total_main_cost=total_main_cost,
+                    total_judge_cost=total_judge_cost,
+                    srt_file=srt_file,
+                    sys_file=sys_file,
+                    output_file=output_file,
+                    model_cfg=model_cfg,
+                    judge_cfg=config.get("judge_cfg", model_cfg),
+                    batch_size=batch_size,
+                    final_eff_batch_size=effective_batch_size,
+                    judge_batch_size=config.get("judge_batch_size", "?"),
+                    log_fn=lambda msg: log(self.log_queue, session_log_file, msg),
+                )
+                # ─────────────────────────────────────────────────────────
+
                 if current_checkpoint_file and os.path.exists(current_checkpoint_file):
                     os.remove(current_checkpoint_file)
                     log(self.log_queue, session_log_file, f"🧹 Cleaned up checkpoint.")
