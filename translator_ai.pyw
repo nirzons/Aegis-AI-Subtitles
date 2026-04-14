@@ -17,6 +17,10 @@ from app_utils import log, format_cost_display
 from ui_layout import MainUILayout
 from translation_engine import TranslationEngine
 
+# Web GUI Modules
+from shared_state import SharedState
+from web_server import start_web_server
+
 
 class TranslatorApp:
     def __init__(self, root):
@@ -58,11 +62,16 @@ class TranslatorApp:
         self.ui = MainUILayout(self.root)
         self.ui.setup(self)
         self.engine = TranslationEngine(self.log_queue, self.ui_queue)
+        
+        # Web GUI State
+        self.shared_state = SharedState()
+        self.web_server_started = False
 
         # Initial Actions
         self.refresh_files()
         self.refresh_models_ui()
         self.root.after(100, self.process_queues)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     # --- UI Event Handlers ---
 
@@ -132,6 +141,19 @@ class TranslatorApp:
         if hasattr(self, 'engine'):
             self.engine.debug_mode = is_debug
         log(self.log_queue, getattr(self, 'session_log_file', None), f"\n🐞 Debug Mode {state_str}\n")
+                
+    def toggle_web_gui(self):
+        is_enabled = self.ui.widgets.web_gui_var.get()
+        if is_enabled:
+            # First time enablement check
+            if not self.web_server_started:
+                log(self.log_queue, self.session_log_file, "🌐 Initiating Web Dashboard binding...")
+                threading.Thread(target=start_web_server, args=(self.shared_state, "0.0.0.0", 7860, self.log_queue), daemon=True).start()
+                self.web_server_started = True
+            else:
+                log(self.log_queue, self.session_log_file, "🌐 Web Dashboard updates resumed.")
+        else:
+            log(self.log_queue, self.session_log_file, "🌐 Web Dashboard updates paused.")
                 
     def refresh_files(self):
         sysprm_files = sorted([f for f in os.listdir(self.sysprm_dir) if f.lower().endswith('.sysprm')])
@@ -254,6 +276,7 @@ class TranslatorApp:
             log(self.log_queue, self.session_log_file, f"🚀 [{timestamp}] NEW SESSION STARTED")
         
         # Self-healing: same-stride retry once before shrinking; then −max(3, current//6); effective stride = penultimate attempt after retries. ♪ strip etc. in TranslationEngine.
+        self.shared_state.set_running(True)
         threading.Thread(target=self.engine.run_translation, args=(config,), daemon=True).start()
 
     def stop_translation(self):
@@ -264,8 +287,11 @@ class TranslatorApp:
 
     def process_queues(self):
         while not self.log_queue.empty():
-            self.ui.widgets.log_text.insert(tk.END, self.log_queue.get() + "\n")
+            text = self.log_queue.get()
+            self.ui.widgets.log_text.insert(tk.END, text + "\n")
             self.ui.widgets.log_text.see(tk.END)
+            if self.ui.widgets.web_gui_var.get():
+                self.shared_state.append_log(text)
             
         while not self.ui_queue.empty():
             type, data = self.ui_queue.get()
@@ -273,8 +299,12 @@ class TranslatorApp:
                 p, t = data
                 self.ui.widgets.progress_var.set((p/t*100) if t else 0)
                 self.ui.widgets.lbl_progress.config(text=f"Progress: {p}/{t} ({(p/t*100) if t else 0:.1f}%)")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_progress(p, t)
             elif type == "eta":
                 self.ui.widgets.lbl_eta.config(text=f"ETA: {data[0]} | End: {data[1]}")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_eta(data[0], data[1])
             elif type == "timer_start":
                 # Safety: Cancel any existing timer loop before starting a new one
                 if hasattr(self, '_timer_after_id') and self._timer_after_id:
@@ -339,19 +369,38 @@ class TranslatorApp:
                 self.ui.widgets.lbl_timer.config(text="")
             elif type == "judge_start":
                 self.ui.widgets.lbl_status.config(text="⚖️ JUDGING...", fg="#9b59b6")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_status("⚖️ JUDGING...", "#9b59b6")
             elif type == "judge_progress":
                 c, t = data
                 self.ui.widgets.lbl_status.config(text=f"⚖️ JUDGING {c}/{t}...", fg="#9b59b6")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_status(f"⚖️ JUDGING {c}/{t}...", "#9b59b6")
             elif type == "judge_stop":
                 self.ui.widgets.lbl_status.config(text=f"📦 Size: {self.last_batch_size}", fg="#3498db")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_status(f"📦 Size: {self.last_batch_size}", "#3498db")
             elif type == "batch_success": # I should add this signal to engine
                 self.ui.widgets.lbl_status.config(text="")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_status("Processing...")
             elif type == "cost":
                 self.ui.widgets.lbl_cost.config(text=format_cost_display(data[0], data[1]))
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_cost(data[0], data[1], display_text=self.ui.widgets.lbl_cost.cget("text"))
+            elif type == "segment":
+                if self.ui.widgets.web_gui_var.get():
+                    idx, time_val, eng, heb = data
+                    self.shared_state.add_segment(idx, time_val, eng, heb)
+            elif type == "upcoming":
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.set_upcoming(data)
             elif type == "finished":
                 self.is_running = False
                 self.resp_timer_seconds = -1
                 self._toggle_ui_state(tk.NORMAL)
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.set_running(False)
             elif type == "refresh":
                 self.refresh_files()
 
@@ -422,6 +471,34 @@ class TranslatorApp:
         self.root.clipboard_append(self.ui.widgets.log_text.get(1.0, tk.END))
         messagebox.showinfo("Copied", "Terminal logs copied!")
 
+    def on_closing(self):
+        """Graceful shutdown handler with aggressive terminal error suppression."""
+        if self.web_server_started and hasattr(self, 'shared_state'):
+            try:
+                # 1. Wake up all background listeners (WebSocket threads)
+                self.shared_state.shutdown()
+                
+                # 2. Signal the uvicorn server to exit
+                if hasattr(self.shared_state, '_web_server'):
+                    self.shared_state._web_server.should_exit = True
+                    log(self.log_queue, self.session_log_file, "🌐 Web Dashboard shutting down...")
+                
+                # 3. Redirect stdout/stderr to devnull BEFORE the interpreter starts finalizing
+                # This prevents the "could not acquire lock for <stdout>" errors
+                import os # Ensure os is imported
+                f = open(os.devnull, 'w')
+                sys.stdout = f
+                sys.stderr = f
+            except: pass
+        
+        # Stop the engine if it's running
+        if self.is_running:
+            self.engine.request_stop()
+            
+        # Schedule the actual destruction with a 300ms delay to allow final cleanup
+        # The user will see the window disappear, but the process has a moment to wrap up
+        self.root.after(300, self.root.destroy)
+
 
     def _fmt_seconds(self, s):
         if s < 0: return "?"
@@ -437,9 +514,12 @@ class TranslatorApp:
             
             tag = "🔄 RETRY " if getattr(self, 'current_is_retry', False) else ""
             est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
-            self.ui.widgets.lbl_timer.config(text=f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
+            timer_text = f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}"
+            self.ui.widgets.lbl_timer.config(text=timer_text)
+            if self.ui.widgets.web_gui_var.get():
+                self.shared_state.update_timer(timer_text)
             self._timer_after_id = self.root.after(1000, self._tick_timer)
 if __name__ == "__main__":
     root = tk.Tk()
-    TranslatorApp(root)
+    app = TranslatorApp(root)
     root.mainloop()

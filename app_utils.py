@@ -1,6 +1,7 @@
 import os
 import datetime
 import json
+from text_processing import fix_rtl
 
 def log(log_queue, log_file, text):
     """Logs message to the provided queue (for UI) and the session log file."""
@@ -85,4 +86,26 @@ def load_srt_index_to_text(path):
             idx = lines[0].strip()
             text = '\n'.join(l.strip() for l in lines[2:])
             out[idx] = text
+    return out
+
+def load_srt_full_history(path):
+    """Parse an SRT file into {index: {time: ..., text: ...}}. Missing/empty file → {}."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            content = f.read().replace('\r\n', '\n')
+    except Exception:
+        return {}
+    
+    from text_processing import unfix_rtl
+    out = {}
+    for block in content.strip().split('\n\n'):
+        lines = [l.strip() for l in block.split('\n') if l.strip()]
+        if len(lines) >= 3:
+            idx = lines[0]
+            timestamp = lines[1]
+            text = '\n'.join(lines[2:])
+            # Restore logical RTL for the web browser
+            out[idx] = {"time": timestamp, "text": unfix_rtl(text)}
     return out

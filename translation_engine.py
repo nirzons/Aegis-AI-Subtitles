@@ -7,7 +7,7 @@ import threading
 from constants import GLOBAL_SYSTEM_INSTRUCTIONS, GLOBAL_TECHNICAL_RULES, JSON_SCHEMA_TEMPLATE
 from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch
 from llm_api import call_llm, call_llm_judge
-from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text
+from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text, load_srt_full_history
 
 from translation_stats import _inc_by_size, make_stats, print_stats
 
@@ -176,6 +176,26 @@ class TranslationEngine:
 
             if resume_mode:
                 translated_heb_by_index = load_srt_index_to_text(output_file)
+                # Back-fill last 50 segments for web dashboard history
+                try:
+                    full_heb_history = load_srt_full_history(output_file)
+                    # Find where we are in ordered_srt_indices
+                    if srt_content and ordered_srt_indices: 
+                        processed_indices = []
+                        for idx_o in ordered_srt_indices:
+                            if idx_o in translated_heb_by_index:
+                                processed_indices.append(idx_o)
+                            else:
+                                break
+                        
+                        last_50_indices = processed_indices[-50:]
+                        for idx_h in last_50_indices:
+                            h_data = full_heb_history.get(idx_h)
+                            if h_data:
+                                e_text = eng_by_index.get(idx_h, "")
+                                self.ui_queue.put(("segment", (idx_h, h_data["time"], e_text, h_data["text"])))
+                except Exception as e:
+                    log(self.log_queue, session_log_file, f"⚠️ Warning: History back-fill failed: {e}")
             else:
                 translated_heb_by_index = {}
 
@@ -227,6 +247,18 @@ class TranslationEngine:
             with open(output_file, file_mode, encoding='utf-8') as f_out:
                 
                 while current_index < total_blocks and not self.should_stop:
+                    # Emit upcoming 2 cues for web viewer preview
+                    upcoming_cues = []
+                    for b_up in blocks[current_index : current_index + 2]:
+                        l_up = b_up.split('\n')
+                        if len(l_up) >= 2:
+                            upcoming_cues.append({
+                                "index": l_up[0].strip(),
+                                "time": l_up[1].strip(),
+                                "text": "\n".join([line.strip() for line in l_up[2:]]).strip()
+                            })
+                    self.ui_queue.put(("upcoming", upcoming_cues))
+
                     current_batch_size = effective_batch_size
                     batch_success = False
                     min_batch_failures = 0  # at size 2, allow up to 3 attempts before total failure
@@ -590,6 +622,9 @@ class TranslationEngine:
                                 idx = m['index']
                                 heb_text = received_dict[idx]
                                 translated_lines.append(f"{idx}\n{m['timestamp']}\n{fix_rtl(heb_text)}")
+                                # Emit each successful segment for high-frequency web dashboard updates. 
+                                # Note: We use RAW heb_text here because it's already 'Logical RTL' from the LLM.
+                                self.ui_queue.put(("segment", (idx, m['timestamp'], m['text'], heb_text)))
                             
                             f_out.write('\n\n'.join(translated_lines) + '\n\n')
                             f_out.flush()

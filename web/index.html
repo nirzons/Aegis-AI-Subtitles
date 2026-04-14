@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🛡️ Aegis AI Subtitles - Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <div class="logo">
+                <span class="shield">🛡️</span>
+                <h1>Aegis AI Subtitles</h1>
+            </div>
+            <div id="connection-status" class="badge badge-error">
+                <span class="dot"></span>
+                <span class="status-text">Disconnected</span>
+            </div>
+        </header>
+
+        <main>
+            <section class="stats-grid">
+                <!-- Progress Card -->
+                <div class="card glass">
+                    <div class="card-header">
+                        <span class="icon">📊</span>
+                        <h2>Progress</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="progress-info">
+                            <span id="progress-text">0/0</span>
+                            <span id="progress-percent">0%</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div id="progress-fill" class="progress-bar-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Timer Card -->
+                <div class="card glass">
+                    <div class="card-header">
+                        <span class="icon">⏱️</span>
+                        <h2>Timer / Estimation</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="timer-label" class="large-text">--:--</div>
+                        <div id="eta-label" class="sub-text">ETA: --:--</div>
+                    </div>
+                </div>
+
+                <!-- Cost Card -->
+                <div class="card glass accent-success">
+                    <div class="card-header">
+                        <span class="icon">💰</span>
+                        <h2>Session Cost</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="cost-display" class="large-text">$0.00</div>
+                        <div id="cost-detail" class="sub-text">Main + Judge</div>
+                    </div>
+                </div>
+
+                <!-- Status Card -->
+                <div class="card glass accent-info">
+                    <div class="card-header">
+                        <span class="icon">ℹ️</span>
+                        <h2>Status</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="current-status" class="status-badge">Idle</div>
+                        <div id="finish-time" class="sub-text">Ends: --:--</div>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="live-viewer-section">
+                <div class="card glass">
+                    <div class="card-header">
+                        <div class="title-with-subtitle">
+                            <span class="icon">🎬</span>
+                            <h2>Live Translation Feed</h2>
+                        </div>
+                        <div class="card-actions">
+                            <span id="live-viewer-status" class="sub-text">Showing last 50 segments</span>
+                            <button id="feed-toggle-btn" class="toggle-btn" title="Toggle Visibility">
+                                <span class="toggle-text">Minimize</span>
+                                <span class="chevron">🔽</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="translation-header">
+                            <div class="col-idx">#</div>
+                            <div class="col-eng">English Original</div>
+                            <div class="col-heb">Hebrew Translation</div>
+                        </div>
+                        <div id="translation-feed" class="translation-feed">
+                            <!-- Segments will be injected here -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="terminal-section">
+                <div class="terminal-header">
+                    <div class="terminal-title">
+                        <span class="icon">💻</span>
+                        <h2>Session Log</h2>
+                    </div>
+                    <div class="terminal-controls">
+                        <button id="clear-btn" class="btn-icon">🗑️</button>
+                        <button id="autoscroll-btn" class="btn-toggle active">Auto-scroll: ON</button>
+                    </div>
+                </div>
+                <div id="terminal" class="terminal-body">
+                    <!-- Logs will be injected here -->
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/web/app.js"></script>
+</body>
+</html>

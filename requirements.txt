@@ -1,2 +1,5 @@
-google-generativeai
 openai
+google-generativeai
+fastapi
+uvicorn[standard]
+websockets

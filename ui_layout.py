@@ -97,7 +97,14 @@ class MainUILayout:
         self.widgets.chk_debug.pack(side=tk.LEFT, padx=15)
 
         # 3. Status & Progress Frame
-        progress_frame = ttk.LabelFrame(self.root, text=" 📊 STATUS & PROGRESS ")
+        progress_header = tk.Frame(self.root, bg=self.root["bg"])
+        tk.Label(progress_header, text=" 📊 STATUS & PROGRESS ", font=("Segoe UI", 10, "bold"), foreground="#2c3e50", background=self.root["bg"]).pack(side=tk.LEFT)
+        
+        self.widgets.web_gui_var = tk.BooleanVar(value=False)
+        self.widgets.chk_web_gui = ttk.Checkbutton(progress_header, text="🌐 Web Dashboard", variable=self.widgets.web_gui_var, command=app.toggle_web_gui)
+        self.widgets.chk_web_gui.pack(side=tk.LEFT, padx=20)
+
+        progress_frame = ttk.LabelFrame(self.root, labelwidget=progress_header)
         progress_frame.pack(fill=tk.X, padx=15, pady=5)
 
         self.widgets.progress_var = tk.DoubleVar()

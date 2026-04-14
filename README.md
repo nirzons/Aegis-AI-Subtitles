@@ -26,6 +26,10 @@ With the built-in **Live Viewer**, you can audit the translation process in real
   - **🔄 Dual-Track Analytics**: Separate performance modeling for "New" vs "Retry" batches.
   - **⚖️ Audit Progress**: Live chunk-tracking (e.g., `Judging 1/3...`) during the QA phase.
   - **🔼 Adaptive Scaling**: Visual indicators for automatic batch-size growth or shrinking.
+- **🌐 Web Dashboard (Remote Monitoring)**: Mirror your translation progress to any device on your local network.
+  - **🎬 Live Feed**: Side-by-side view of English vs. Hebrew with 50-segment history.
+  - **📱 Deeply Responsive**: Specialized "Messenger Style" bubbles for vertical phone viewing.
+  - **🔄 Orientation-Aware**: Automatically switches between Table and Chat views based on rotation.
 - **📋 Clipboard Integration**: Instantly copy terminal output logs with a single button click in the main dashboard.
 - **🖥️ Local Model Support**: "Local" mode optimization for LM Studio and local LLMs, hiding internal magic cost values for a cleaner interface.
 
@@ -42,6 +46,26 @@ You can install all dependencies with a single command:
 ```bash
 pip install -r requirements.txt
 ```
+
+---
+
+## 🌐 Remote Monitoring (Web Dashboard)
+
+Aegis includes a built-in web server that allows you to monitor your translation sessions from your phone or any local device.
+
+### Desktop View
+![Aegis Web Desktop](dashboard_desktop.png)
+
+### Mobile View (Messenger Style)
+![Aegis Web Mobile](dashboard_mobile.png)
+
+To access the dashboard:
+1. Ensure your phone/device is on the same local network (Wi-Fi).
+2. Find your computer's local IP address (e.g., `192.168.1.XXX`).
+3. Open `http://YOUR_IP:7860` in your browser.
+
+> [!TIP]
+> **Firewall Configuration**: If you can't connect, ensure that your PC's firewall (e.g., Windows Defender) is set to allow incoming connections on port **7860**. You may need to add an "Inbound Rule" for your Python installation or explicitly open this port.
 
 ---
 

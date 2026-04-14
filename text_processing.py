@@ -48,6 +48,36 @@ def fix_rtl(text):
         
     return '\n'.join(fixed_lines)
 
+def unfix_rtl(text):
+    """
+    Undoes 'Visual RTL' logic to restore a 'Logical RTL' string for web browsers.
+    Moves punctuation from the start back to the end, and dialogue dashes to the start.
+    """
+    if not text: return text
+    lines = str(text).split('\n')
+    unfixed_lines = []
+    for line in lines:
+        clean_line = line.strip()
+        if not clean_line:
+            unfixed_lines.append(line)
+            continue
+            
+        # Handle dialogue dash (- at the end in Visual mode)
+        is_dialogue = clean_line.endswith(' -')
+        if is_dialogue:
+            clean_line = '-' + clean_line[:-2].strip()
+            
+        # Handle punctuation (at the start in Visual mode)
+        # Note: fix_rtl moved it to the start. We move it back to the end.
+        punc_match = re.match(r'^([.,?!\\\'\":;♪]+)', clean_line)
+        if punc_match:
+            punctuation = punc_match.group(1)
+            main_text = clean_line[len(punctuation):].strip()
+            clean_line = f"{main_text}{punctuation}"
+            
+        unfixed_lines.append(clean_line)
+    return '\n'.join(unfixed_lines)
+
 def strip_music_glyphs_batch(heb_dict):
     """
     1. Removes music note symbols.
