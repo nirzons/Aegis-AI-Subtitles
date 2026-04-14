@@ -163,8 +163,15 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
                 heb_reasons.append(f"IDX:{idx}|מעל ל-9 מילים בעברית באותה השורה באינדקס {idx}")
                 has_overlong_hebrew_line = True
 
-        # 4. בדיקת תוכן אסור: שמות דוברים, SDH, אנגלית
+        # 4. בדיקת תוכן אסור: שמות דוברים, SDH, אנגלית, תווים זרים
         if heb_text:  # Only check content if there IS text
+            
+            # בדיקת תווים זרים (כמו סינית, רוסית וכו')
+            foreign_chars = re.findall(r'[^\x00-\x7F\u0590-\u05FF\u200E\u200F\u202A-\u202C\u2018-\u201D\u2026\u2013\u2014\u20AA\u20AC\u00A3\xA0\xB0♪♫]', heb_text)
+            if foreign_chars:
+                reasons.append(f"STRICT: Foreign characters found in {idx} ({''.join(set(foreign_chars))})")
+                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאו תווים בשפה זרה (למשל סינית, רוסית או סמלים לא מוכרים). חובה להשתמש אך ורק בעברית, אנגלית וסימני פיסוק. מחק את התווים הזרים!")
+            
             if re.search(r'[a-zA-Z]', heb_text):
                 # Exempt: all-caps acronyms (CNN, CBS), spelled-out letters (S-I-F-U)
                 is_exempt = bool(
@@ -173,8 +180,8 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
                     re.search(r'\b[A-Z](-[A-Z])+\b', heb_text)
                 )
                 if not is_exempt:
-                    reasons.append(f"English letters found in {idx}")
-                    heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאו אותיות באנגלית למרות שהתרגום אמור להיות בעברית בלבד.")
+                    reasons.append(f"STRICT: English letters found in {idx}")
+                    heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאו אותיות באנגלית למרות שהתרגום אמור להיות בעברית בלבד. חובה למחוק או לתעתק לעברית!")
 
             # Refined Speaker Name Check (Checks every line, including dialogue dashes)
             # Looks for: [Optional -] [Name 1-15 chars] :
