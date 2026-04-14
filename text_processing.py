@@ -158,7 +158,12 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
         total_heb_words += heb_wc
         
         if eng_wc > 0:
-            block_ratio = heb_wc / eng_wc
+            # Special case: If single English word > 12 chars, use char ratio instead of word ratio
+            if eng_wc == 1 and len(eng_text_clean.strip()) > 12:
+                block_ratio = len(heb_text) / len(eng_text_clean.strip())
+            else:
+                block_ratio = heb_wc / eng_wc
+                
             if block_ratio > 2.0:
                 reasons.append(f"Verbosification at index {idx} ({block_ratio:.1f}x)")
                 heb_reasons.append(f"IDX:{idx}|באינדקס {idx} זוהתה חריגה משמעותית באורך התרגום ביחס למקור. דייק את הניסוח כך שיהיה תמציתי כמו באנגלית, והסר כל מידע נוסף שהוספת או הסקת מעבר למה שכתוב במפורש.")
