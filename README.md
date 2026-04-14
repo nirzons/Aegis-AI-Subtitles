@@ -54,10 +54,10 @@ pip install -r requirements.txt
 Aegis includes a built-in web server that allows you to monitor your translation sessions from your phone or any local device.
 
 ### Desktop View
-![Aegis Web Desktop](dashboard_desktop.png)
+![Aegis Web Desktop](screenshots/dashboard_desktop.png)
 
 ### Mobile View (Messenger Style)
-![Aegis Web Mobile](dashboard_mobile.png)
+![Aegis Web Mobile](screenshots/dashboard_mobile.png)
 
 To access the dashboard:
 1. Ensure your phone/device is on the same local network (Wi-Fi).
