@@ -92,6 +92,10 @@ class MainUILayout:
         self.widgets.btn_open_translated = ttk.Button(ctrl_frame, text="📂 View Output", command=app.open_translated_srt, state=tk.DISABLED)
         self.widgets.btn_open_translated.pack(side=tk.LEFT, padx=5)
 
+        self.widgets.debug_var = tk.BooleanVar(value=False)
+        self.widgets.chk_debug = ttk.Checkbutton(ctrl_frame, text="🐞 Debug mode", variable=self.widgets.debug_var, command=app.toggle_debug_mode)
+        self.widgets.chk_debug.pack(side=tk.LEFT, padx=15)
+
         # 3. Status & Progress Frame
         progress_frame = ttk.LabelFrame(self.root, text=" 📊 STATUS & PROGRESS ")
         progress_frame.pack(fill=tk.X, padx=15, pady=5)

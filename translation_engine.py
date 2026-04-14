@@ -25,6 +25,7 @@ class TranslationEngine:
     def run_translation(self, config):
         try:
             resume_mode = config["resume_mode"]
+            self.debug_mode = config.get("debug_mode", False)
             model_cfg = config["model_cfg"]
             api_key = config["api_key"]
             batch_size = config["batch_size"]  # UI / configured default; may differ from effective_batch_size while running
@@ -349,6 +350,14 @@ class TranslationEngine:
 
                             raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
 
+                            if getattr(self, 'debug_mode', False) and raw_res:
+                                timestamp_str = datetime.datetime.now().strftime("%H:%M:%S")
+                                file_log(session_log_file, f"\n[{timestamp_str}] --- DEBUG TRANSACTION ---")
+                                file_log(session_log_file, f"SYSTEM PROMPT:\n{system_prompt.strip()}\n")
+                                file_log(session_log_file, f"USER PROMPT:\n{final_prompt.strip()}\n")
+                                file_log(session_log_file, f"RAW LLM RESPONSE:\n{raw_res.strip()}\n{'-'*38}\n")
+                                batch_diagnostics_logged = True
+
                             # ── Record LLM call duration ───────────────────
                             _call_duration = time.time() - batch_call_start
                             if is_retry:
@@ -391,6 +400,10 @@ class TranslationEngine:
                             except json.JSONDecodeError:
                                 _inc_by_size(stats["json_parse_errors"], current_batch_size)
                                 raise
+
+                            # Auditor Warning for Placeholder Copy-Pasting
+                            if "<הכנס כאן" in cleaned_res or "<חובה למלא" in cleaned_res:
+                                log(self.log_queue, session_log_file, "⚠️ AUDITOR WARNING: The LLM responded with identical placeholder text from the prompt template!")
 
                             # Schema Recovery Layer: Handle GPT-5 key hallucinations
                             recovered = False

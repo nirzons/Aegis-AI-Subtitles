@@ -120,6 +120,19 @@ class TranslatorApp:
 
     # --- Actions ---
 
+    def toggle_debug_mode(self):
+        is_debug = self.ui.widgets.debug_var.get()
+        if is_debug:
+            ans = messagebox.askyesno("Enable Debug Mode", "Enabling Debug Mode will write massive Input/Output transactions to the log file for EVERY batch.\n\nThis can cause your .txt log files to become extremely large.\n\nAre you sure you want to enable this?", parent=self.root)
+            if not ans:
+                self.ui.widgets.debug_var.set(False)
+                return
+                
+        state_str = "ENABLED" if is_debug else "DISABLED"
+        if hasattr(self, 'engine'):
+            self.engine.debug_mode = is_debug
+        log(self.log_queue, getattr(self, 'session_log_file', None), f"\n🐞 Debug Mode {state_str}\n")
+                
     def refresh_files(self):
         sysprm_files = sorted([f for f in os.listdir(self.sysprm_dir) if f.lower().endswith('.sysprm')])
         srt_files = sorted([f for f in os.listdir(self.english_subs_dir) if f.endswith('.srt')])
@@ -205,6 +218,7 @@ class TranslatorApp:
 
         config = {
             "resume_mode": resume_mode,
+            "debug_mode": self.ui.widgets.debug_var.get(),
             "model_cfg": model_cfg,
             "model_choice": model_idx,
             "api_key": api_key,
