@@ -18,6 +18,7 @@ class SharedState:
         self.is_running = False
         self.segments = deque(maxlen=50) # Last 50 items: {idx, time, eng, heb}
         self.upcoming = [] # Next 2 items: {idx, time, eng}
+        self.active_clients = 0
 
     def _bump_version(self):
         self._version += 1
@@ -84,6 +85,11 @@ class SharedState:
             self.upcoming = segments
             self._bump_version()
 
+    def change_active_clients(self, delta):
+        with self._lock:
+            self.active_clients = max(0, self.active_clients + delta)
+            self._bump_version()
+
     def snapshot(self):
         """Returns a JSON-serializable deep copy of the state."""
         with self._lock:
@@ -97,7 +103,8 @@ class SharedState:
                 "status": copy.deepcopy(self.status),
                 "log_lines": list(self.log_lines),
                 "segments": list(self.segments),
-                "upcoming": list(self.upcoming)
+                "upcoming": list(self.upcoming),
+                "active_clients": self.active_clients
             }
 
     def wait_for_change(self, timeout=None):

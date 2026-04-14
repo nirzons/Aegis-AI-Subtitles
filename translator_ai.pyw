@@ -26,7 +26,7 @@ class TranslatorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("🛡️ Aegis AI Subtitles")
-        self.root.geometry("900x750")
+        self.root.geometry("698x750")
 
         self._apply_styles()
 
@@ -403,6 +403,16 @@ class TranslatorApp:
                     self.shared_state.set_running(False)
             elif type == "refresh":
                 self.refresh_files()
+
+        # Update Web Dashboard Active Clients Label
+        if self.ui.widgets.web_gui_var.get():
+            count = self.shared_state.active_clients
+            if count > 0:
+                self.ui.widgets.lbl_web_clients.config(text=f"({count} Active)")
+            else:
+                self.ui.widgets.lbl_web_clients.config(text="")
+        else:
+            self.ui.widgets.lbl_web_clients.config(text="")
 
         self.root.after(100, self.process_queues)
 

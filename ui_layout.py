@@ -103,6 +103,9 @@ class MainUILayout:
         self.widgets.web_gui_var = tk.BooleanVar(value=False)
         self.widgets.chk_web_gui = ttk.Checkbutton(progress_header, text="🌐 Web Dashboard", variable=self.widgets.web_gui_var, command=app.toggle_web_gui)
         self.widgets.chk_web_gui.pack(side=tk.LEFT, padx=20)
+        
+        self.widgets.lbl_web_clients = tk.Label(progress_header, text="", font=("Segoe UI", 8, "italic"), fg="#3498db", bg=self.root["bg"])
+        self.widgets.lbl_web_clients.pack(side=tk.LEFT, padx=5)
 
         progress_frame = ttk.LabelFrame(self.root, labelwidget=progress_header)
         progress_frame.pack(fill=tk.X, padx=15, pady=5)

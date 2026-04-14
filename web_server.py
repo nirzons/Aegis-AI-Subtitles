@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from shared_state import SharedState
 import os
 
-def create_app(shared_state: SharedState):
+def create_app(shared_state: SharedState, log_queue=None):
     app = FastAPI(title="Aegis Web Dashboard")
 
     # Static files directory
@@ -25,6 +25,12 @@ def create_app(shared_state: SharedState):
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
+        
+        # Track connection
+        shared_state.change_active_clients(1)
+        if log_queue:
+            log_queue.put(f"🌐 [Web GUI] New client connected. Total: {shared_state.active_clients}")
+            
         # Send initial snapshot immediately
         await websocket.send_json(shared_state.snapshot())
         
@@ -33,7 +39,6 @@ def create_app(shared_state: SharedState):
         try:
             while True:
                 # Wait for next state change (non-blocking for the event loop)
-                # We use a timeout to check if the connection is still alive occasionally
                 changed = await asyncio.to_thread(shared_state.wait_for_change, timeout=5.0)
                 
                 snap = shared_state.snapshot()
@@ -43,7 +48,12 @@ def create_app(shared_state: SharedState):
         except WebSocketDisconnect:
             pass
         except Exception as e:
-            print(f"WebSocket error: {e}")
+            if log_queue:
+                log_queue.put(f"⚠️ [Web GUI] WebSocket error: {e}")
+        finally:
+            shared_state.change_active_clients(-1)
+            if log_queue:
+                log_queue.put(f"🌐 [Web GUI] Client disconnected. Total: {shared_state.active_clients}")
 
     # Mount static assets (css, js)
     app.mount("/web", StaticFiles(directory=static_dir), name="static")
@@ -68,7 +78,7 @@ def start_web_server(shared_state: SharedState, host="0.0.0.0", port=7860, log_q
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        app = create_app(shared_state)
+        app = create_app(shared_state, log_queue=log_queue)
         # log_config=None prevents the 'Unable to configure formatter default' crash in pyw environments
         config = uvicorn.Config(app, host=host, port=port, log_config=None, loop="asyncio")
         server = NoSignalServer(config)
