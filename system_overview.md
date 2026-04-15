@@ -32,11 +32,13 @@ A two-tier validation system:
 ### 5. Settings & Config (`settings.py` & `constants.py`)
 Manages persistent state across sessions. Supports dynamic model pricing and **Cache Discount** calculation, allowing the system to accurately track costs even as API providers change their pricing structures.
 
-### 6. Web Monitoring Architecture (`web_server.py`)
-A fast, read-only monitoring layer built on FastAPI and WebSockets.
-- **Thread-Safe Reflection**: Utilizes a `SharedState` singleton (thread-safe dequeues and locks) to mirror the main application's state without impacting the translation engine's performance.
-- **RTL Logical Bridge**: Since the main engine produces "Visual RTL" (physical punctuation swapping for SRT players), the web server implements an `unfix_rtl` translator to restore **Logical RTL** for proper web browser rendering.
-- **Responsive Logic**: Features an orientation-aware CSS layer that toggles between high-density grid layouts (Landscape) and context-first "Messenger Bubbles" (Portrait).
+### 6. Web Monitoring Architecture (`web_server.py`, `shared_state.py`, `web/`)
+A high-fidelity, read-only monitoring layer built on **FastAPI** and **WebSockets**, with a **Tailwind CSS V3 Command Center** frontend.
+- **Thread-Safe Reflection**: A `SharedState` singleton bridges the translation engine thread and the web server without blocking either. Changes increment a monotonic version counter; the WS server pushes a new snapshot only when the version changes.
+- **V3 Telemetry Hooks**: The engine calls `update_telemetry()` (tokens/sec, cache hit %) and `update_audit()` (batch size, batch trend, cause label) at key pipeline moments, feeding the live topbar.
+- **Cause Labelling**: Every batch attempt updates the dashboard's "Cause" field — fresh batches show `✦ Fresh Batch`, while failures inject the specific reason (`Auditor: Failed & Retry`, `⚠️ Parse Error: Retry`, etc.) so the current retry is always self-explanatory.
+- **Batch Size Arrow**: The JS frontend tracks actual batch size changes client-side (mirroring Tkinter's `lbl_status` arrow logic) and persists the ↑/↓ indicator until the next genuine size change.
+- **Responsive Layout**: Desktop browsers show Terminal Logs and Live Intercept Feed side-by-side (`md:flex-row`); mobile stacks them vertically. All telemetry remains visible on both form factors.
 
 ---
 

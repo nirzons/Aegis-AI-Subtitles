@@ -26,10 +26,13 @@ With the built-in **Live Viewer**, you can audit the translation process in real
   - **🔄 Dual-Track Analytics**: Separate performance modeling for "New" vs "Retry" batches.
   - **⚖️ Audit Progress**: Live chunk-tracking (e.g., `Judging 1/3...`) during the QA phase.
   - **🔼 Adaptive Scaling**: Visual indicators for automatic batch-size growth or shrinking.
-- **🌐 Web Dashboard (Remote Monitoring)**: Mirror your translation progress to any device on your local network.
-  - **🎬 Live Feed**: Side-by-side view of English vs. Hebrew with 50-segment history.
-  - **📱 Deeply Responsive**: Specialized "Messenger Style" bubbles for vertical phone viewing.
-  - **🔄 Orientation-Aware**: Automatically switches between Table and Chat views based on rotation.
+- **🌐 Web Dashboard (V3 Command Center)**: A full-featured remote monitoring console accessible from any device on your local network.
+  - **📊 Live Telemetry Topbar**: Real-time tokens/sec with a sparkline chart, cache hit %, session cost (Main + Judge split), batch size with ↑↓ trend indicators, and a live timer.
+  - **🏷️ Cause Indicator**: Shows exactly why the current batch is running — `✦ Fresh Batch`, `Auditor: Failed & Retry`, `Judge: Failed & Retry`, `⚠️ Parse Error: Retry`, etc.
+  - **🖥️ Side-by-Side Desktop Layout**: Terminal Logs and Live Intercept Feed panels sit side by side on desktop for maximum information density, stacking vertically on mobile.
+  - **🔍 Filterable Terminal**: Searchable, syntax-highlighted log terminal with emoji-keyed colour coding.
+  - **🎬 Live Intercept Feed**: Paginated English ↔ Hebrew grid with auto-scroll and 50-segment resume history.
+  - **📱 Responsive Mobile View**: Compact stacked layout optimised for phone screens without losing any telemetry.
 - **📋 Clipboard Integration**: Instantly copy terminal output logs with a single button click in the main dashboard.
 - **🖥️ Local Model Support**: "Local" mode optimization for LM Studio and local LLMs, hiding internal magic cost values for a cleaner interface.
 
