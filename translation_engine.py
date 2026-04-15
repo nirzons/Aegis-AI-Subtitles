@@ -13,9 +13,10 @@ from translation_stats import _inc_by_size, make_stats, print_stats
 
 
 class TranslationEngine:
-    def __init__(self, log_queue, ui_queue):
+    def __init__(self, log_queue, ui_queue, shared_state=None):
         self.log_queue = log_queue
         self.ui_queue = ui_queue
+        self.shared_state = shared_state # Added for Web Dashboard V3
         self.should_stop = False
         self.current_output_file = None
 
@@ -182,11 +183,11 @@ class TranslationEngine:
                     # Find where we are in ordered_srt_indices
                     if srt_content and ordered_srt_indices: 
                         processed_indices = []
-                        for idx_o in ordered_srt_indices:
+                        # Only scan up to the resume point. 
+                        # Do NOT break on a missing segment (in case the LLM skipped an index previously)
+                        for idx_o in ordered_srt_indices[:current_index]:
                             if idx_o in translated_heb_by_index:
                                 processed_indices.append(idx_o)
-                            else:
-                                break
                         
                         last_50_indices = processed_indices[-50:]
                         for idx_h in last_50_indices:
@@ -242,6 +243,10 @@ class TranslationEngine:
                 log(self.log_queue, session_log_file, f"📦 Batch Size: {effective_batch_size} | Safety Net: ACTIVE")
 
             self.ui_queue.put(("progress", (processed, total_blocks)))
+
+            # Pre-seed web dashboard with checkpoint costs on resume (mirrors Tkinter cost label behaviour)
+            if resume_mode and self.shared_state:
+                self.shared_state.update_cost(total_main_cost, total_judge_cost)
 
             file_mode = 'a' if resume_mode else 'w'
             with open(output_file, file_mode, encoding='utf-8') as f_out:
@@ -373,6 +378,20 @@ class TranslationEngine:
                             is_retry = (len(attempted_strides) > 1)
                             self.ui_queue.put(("timer_start", (expected_count, is_retry)))
 
+                            # V3 Audit Hook: Active Batch & Status
+                            if self.shared_state:
+                                trend = -1 if is_retry else 0
+                                if not is_retry:
+                                    # Reset cause label for fresh batches — retries keep the ruling that explains why they're retrying
+                                    self.shared_state.update_audit(batch_size=expected_count, batch_trend=trend, last_decision="✦ Fresh Batch")
+                                else:
+                                    self.shared_state.update_audit(batch_size=expected_count, batch_trend=trend)
+                                
+                                # Update only the pulsing status pill (Activity vs Ruling)
+                                status_txt = "Translating (Retry)" if is_retry else "Translating"
+                                status_clr = "#f59e0b" if is_retry else "#0ea5e9"
+                                self.shared_state.update_status(status_txt, status_clr)
+
                             # ── Track attempt ──────────────────────────────
                             stats["total_batches_attempted"] += 1
                             if is_retry:
@@ -413,6 +432,11 @@ class TranslationEngine:
                             else:
                                 batch_cost = (in_tokens / 1e6 * model_cfg['input_price']) + (out_tokens / 1e6 * model_cfg['output_price'])
                                 hit_str = ""
+
+                            # V3 Telemetry Hook: Speed and Cache
+                            if self.shared_state:
+                                tokens_per_sec = (in_tokens + out_tokens) / _call_duration if _call_duration > 0 else 0
+                                self.shared_state.update_telemetry(cache_hit_percent=int(hit_pct), tokens_per_sec=tokens_per_sec)                                
                             
                             brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
                             brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({brain_load:.1f}%)" if reasoning_tokens > 0 else ""
@@ -532,10 +556,16 @@ class TranslationEngine:
                                     last_judged_indices = set(indices)
                                     _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
                                     log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
+                                    # V3 Audit Hook: Auditor Rejection Ruling
+                                    if self.shared_state:
+                                        self.shared_state.update_audit(last_decision="Auditor: Failed & Retry", batch_trend=-1)
                                     raise ValueError(f"Heuristic Rejection (skip judge): {audit_reason}")
 
                                 _inc_by_size(stats["auditor_sent_to_judge"], current_batch_size)
                                 log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Calling Judge...")
+                                # V3 Audit Hook: Auditor Passing Ruling
+                                if self.shared_state:
+                                    self.shared_state.update_audit(last_decision="Auditor: Sent to Judging", batch_trend=0)
                                 self.ui_queue.put(("judge_start", None))
                                 
                                 judge_cfg = config["judge_cfg"]
@@ -607,6 +637,11 @@ class TranslationEngine:
                                         # Normal judge rejection — use judge's error map as feedback
                                         last_judge_error = judge_reason
                                         _inc_by_size(stats["judge_rejections"], current_batch_size)
+                                    
+                                    # V3 Audit Hook: Judge Rejection Ruling
+                                    if self.shared_state:
+                                        self.shared_state.update_audit(last_decision="Judge: Failed & Retry", batch_trend=-1)
+
                                     last_judged_indices = set(indices)
                                     raise ValueError("Judge Rejection")
                                 else:
@@ -614,6 +649,11 @@ class TranslationEngine:
                                     last_judged_indices = set()
                                     _inc_by_size(stats["judge_approvals"], current_batch_size)
                                     _inc_by_size(stats["judge_approved_passes_by_size"], current_batch_size)
+                                    
+                                    # V3 Audit Hook: Judge Approval Ruling
+                                    if self.shared_state:
+                                        self.shared_state.update_audit(last_decision="Judge: Approved", batch_trend=1)
+
                                     msg = f"✅ Judge Approved: {judge_reason}" if judge_reason and judge_reason != {} else "✅ Judge Approved"
                                     log(self.log_queue, session_log_file, msg)
 
@@ -653,13 +693,33 @@ class TranslationEngine:
                             last_judge_error = ""
                             last_judged_indices = set()
 
+                            # V3 Audit Hook: Return to Idle
+                            if self.shared_state:
+                                self.shared_state.update_status("Idle", "#7f8c8d") # <--- THIS MAKES IT GRAY
+
                         except Exception as e:
                             success_streak = 0
                             batch_label = f"{indices[0] if indices else '?'}-{indices[-1] if indices else '?'}"
                             
                             # Log error TO TERMINAL ONLY (to prevent cascading in file log)
                             self.log_queue.put(f"⚠️ Batch Failure: {e}")
-                            
+
+                            # V3 Audit Hook: Generic failure cause for exceptions not caught by heuristic/judge hooks
+                            if self.shared_state:
+                                e_str = str(e)
+                                # Heuristic/Judge failures already called update_audit before raising — don't override
+                                if "Heuristic Rejection" not in e_str and "Judge Rejection" not in e_str:
+                                    if isinstance(e, json.JSONDecodeError):
+                                        _cause = "⚠️ Parse Error: Retry"
+                                    elif "Schema collapse" in e_str or "translated_srt" in e_str:
+                                        _cause = "⚠️ Schema Error: Retry"
+                                    elif "Sync Error" in e_str:
+                                        _cause = "⚠️ Sync Error: Retry"
+                                    else:
+                                        _cause = "⚠️ API Error: Retry"
+                                    self.shared_state.update_audit(last_decision=_cause)
+
+
                             if not batch_diagnostics_logged:
                                 file_log(session_log_file, f"--- BATCH {batch_label} FAILURE DIAGNOSTICS (PRIMARY) ---")
                                 file_log(session_log_file, f"SYSTEM PROMPT:\n{_batch_system_prompt}")

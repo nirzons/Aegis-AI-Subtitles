@@ -8,7 +8,7 @@ class SharedState:
         self._event = threading.Event()
         self._version = 0
         
-        # State Data
+        # Original State Data
         self.log_lines = deque(maxlen=max_log_lines)
         self.progress = {"processed": 0, "total": 0, "percent": 0.0}
         self.eta = {"time_remaining": "--:--", "finish_time": "--:--"}
@@ -20,6 +20,18 @@ class SharedState:
         self.upcoming = [] # Next 2 items: {idx, time, eng}
         self.active_clients = 0
 
+        # NEW V3 State Data
+        self.telemetry = {
+            "cache_hit_percent": 0,
+            "tokens_per_sec": 0.0,
+            "speed_history": deque(maxlen=15)
+        }
+        self.audit = {
+            "last_decision": "System Initialized",
+            "batch_size": 0,
+            "batch_trend": 0 
+        }
+
     def _bump_version(self):
         self._version += 1
         self._event.set()
@@ -27,7 +39,6 @@ class SharedState:
 
     def append_log(self, line: str):
         with self._lock:
-            # Strip any trailing newlines as the frontend will handle them
             self.log_lines.append(line.rstrip())
             self._bump_version()
 
@@ -50,8 +61,28 @@ class SharedState:
                 self.cost["display"] = display_text
             self._bump_version()
 
+    # --- THE MISSING V3 METHODS ---
+    def update_telemetry(self, cache_hit_percent: int = None, tokens_per_sec: float = None):
+        with self._lock:
+            if cache_hit_percent is not None:
+                self.telemetry["cache_hit_percent"] = cache_hit_percent
+            if tokens_per_sec is not None:
+                self.telemetry["tokens_per_sec"] = tokens_per_sec
+                self.telemetry["speed_history"].append(tokens_per_sec)
+            self._bump_version()
+
+    def update_audit(self, last_decision: str = None, batch_size: int = None, batch_trend: int = None):
+        with self._lock:
+            if last_decision is not None:
+                self.audit["last_decision"] = last_decision
+            if batch_size is not None:
+                self.audit["batch_size"] = batch_size
+            if batch_trend is not None:
+                self.audit["batch_trend"] = batch_trend
+            self._bump_version()
+    # ------------------------------
+
     def update_timer(self, label: str):
-        """Expects label like '⏱️ 0:15 / 📦 Est: 2:30' or '⏱️ 🔄 RETRY 0:05'"""
         with self._lock:
             self.timer["label"] = label
             self._bump_version()
@@ -66,7 +97,7 @@ class SharedState:
             self.is_running = running
             if not running:
                 self.status = {"text": "Finished", "color": "#27ae60"}
-                self.upcoming = [] # Clear upcoming on finish
+                self.upcoming = [] 
             self._bump_version()
 
     def add_segment(self, idx, time, eng, heb):
@@ -80,7 +111,6 @@ class SharedState:
             self._bump_version()
 
     def set_upcoming(self, segments):
-        """Expects list of {idx, time, text}"""
         with self._lock:
             self.upcoming = segments
             self._bump_version()
@@ -91,7 +121,6 @@ class SharedState:
             self._bump_version()
 
     def snapshot(self):
-        """Returns a JSON-serializable deep copy of the state."""
         with self._lock:
             return {
                 "version": self._version,
@@ -101,6 +130,14 @@ class SharedState:
                 "cost": copy.deepcopy(self.cost),
                 "timer": copy.deepcopy(self.timer),
                 "status": copy.deepcopy(self.status),
+                "telemetry": {
+                    "cost_main": self.cost.get("main", 0.0),
+                    "cost_judge": self.cost.get("judge", 0.0),
+                    "cache_hit_percent": self.telemetry["cache_hit_percent"],
+                    "tokens_per_sec": self.telemetry["tokens_per_sec"],
+                    "speed_history": list(self.telemetry["speed_history"])
+                },
+                "audit": copy.deepcopy(self.audit),
                 "log_lines": list(self.log_lines),
                 "segments": list(self.segments),
                 "upcoming": list(self.upcoming),
@@ -108,9 +145,7 @@ class SharedState:
             }
 
     def wait_for_change(self, timeout=None):
-        """Blocks until version increments or shutdown is called."""
         return self._event.wait(timeout)
 
     def shutdown(self):
-        """Wakes up all background listeners to allow for a clean exit."""
         self._event.set()

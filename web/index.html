@@ -3,127 +3,170 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🛡️ Aegis AI Subtitles - Dashboard</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/web/styles.css">
+    <title>Aegis AI - Command Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body {
+            background-color: #0a0a0a;
+            font-family: 'Inter', sans-serif;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #171717; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+        ::placeholder { color: #52525b; }
+    </style>
 </head>
-<body>
-    <div class="app-container">
-        <header>
-            <div class="logo">
-                <span class="shield">🛡️</span>
-                <h1>Aegis AI Subtitles</h1>
+<body class="p-2 md:p-4 flex flex-col gap-4">
+
+    <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-3 flex flex-col xl:flex-row justify-between items-center gap-4 shadow-lg relative overflow-hidden">
+        
+        <div class="flex items-center gap-6 z-10 w-64">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-shield text-sky-500"></i>
+                <span class="font-bold tracking-tight text-white">AEGIS</span>
             </div>
-            <div id="connection-status" class="badge badge-error">
-                <span class="dot"></span>
-                <span class="status-text">Disconnected</span>
-            </div>
-        </header>
-
-        <main>
-            <section class="stats-grid">
-                <!-- Progress Card -->
-                <div class="card glass">
-                    <div class="card-header">
-                        <span class="icon">📊</span>
-                        <h2>Progress</h2>
-                    </div>
-                    <div class="card-body">
-                        <div class="progress-info">
-                            <span id="progress-text">0/0</span>
-                            <span id="progress-percent">0%</span>
-                        </div>
-                        <div class="progress-bar-container">
-                            <div id="progress-fill" class="progress-bar-fill" style="width: 0%"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Timer Card -->
-                <div class="card glass">
-                    <div class="card-header">
-                        <span class="icon">⏱️</span>
-                        <h2>Timer / Estimation</h2>
-                    </div>
-                    <div class="card-body">
-                        <div id="timer-label" class="large-text">--:--</div>
-                        <div id="eta-label" class="sub-text">ETA: --:--</div>
-                    </div>
-                </div>
-
-                <!-- Cost Card -->
-                <div class="card glass accent-success">
-                    <div class="card-header">
-                        <span class="icon">💰</span>
-                        <h2>Session Cost</h2>
-                    </div>
-                    <div class="card-body">
-                        <div id="cost-display" class="large-text">$0.00</div>
-                        <div id="cost-detail" class="sub-text">Main + Judge</div>
-                    </div>
-                </div>
-
-                <!-- Status Card -->
-                <div class="card glass accent-info">
-                    <div class="card-header">
-                        <span class="icon">ℹ️</span>
-                        <h2>Status</h2>
-                    </div>
-                    <div class="card-body">
-                        <div id="current-status" class="status-badge">Idle</div>
-                        <div id="finish-time" class="sub-text">Ends: --:--</div>
-                    </div>
-                </div>
-            </section>
             
-            <section class="live-viewer-section">
-                <div class="card glass">
-                    <div class="card-header">
-                        <div class="title-with-subtitle">
-                            <span class="icon">🎬</span>
-                            <h2>Live Translation Feed</h2>
-                        </div>
-                        <div class="card-actions">
-                            <span id="live-viewer-status" class="sub-text">Showing last 50 segments</span>
-                            <button id="feed-toggle-btn" class="toggle-btn" title="Toggle Visibility">
-                                <span class="toggle-text">Minimize</span>
-                                <span class="chevron">🔽</span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="translation-header">
-                            <div class="col-idx">#</div>
-                            <div class="col-eng">English Original</div>
-                            <div class="col-heb">Hebrew Translation</div>
-                        </div>
-                        <div id="translation-feed" class="translation-feed">
-                            <!-- Segments will be injected here -->
-                        </div>
-                    </div>
+            <div class="flex flex-col w-64">
+                <div class="flex justify-between items-end mb-1">
+                    <div class="text-[10px] text-neutral-400 font-bold uppercase tracking-wider">Progress & ETA</div>
+                    <span id="progress-percent" class="text-[10px] text-sky-400 mono font-bold">0%</span>
                 </div>
-            </section>
+                
+                <div class="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden mb-2 border border-white/5">
+                    <div id="progress-fill" class="h-full bg-gradient-to-r from-sky-600 to-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.5)] transition-all duration-500" style="width: 0%"></div>
+                </div>
 
-            <section class="terminal-section">
-                <div class="terminal-header">
-                    <div class="terminal-title">
-                        <span class="icon">💻</span>
-                        <h2>Session Log</h2>
-                    </div>
-                    <div class="terminal-controls">
-                        <button id="clear-btn" class="btn-icon">🗑️</button>
-                        <button id="autoscroll-btn" class="btn-toggle active">Auto-scroll: ON</button>
+                <div class="flex items-baseline gap-2">
+                    <span id="progress-text" class="text-xl font-bold text-white mono leading-none">0/0</span>
+                    <span id="eta-label" class="text-[11px] text-sky-400 mono bg-sky-900/30 px-1.5 py-0.5 rounded border border-sky-500/20">--:--</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="hidden md:flex items-center justify-center gap-6 px-6 border-x border-neutral-800/50 z-10">
+            <div class="flex flex-col w-32">
+                <div class="text-[9px] text-neutral-500 uppercase tracking-widest font-bold mb-1">Processing Speed</div>
+                <div class="flex items-center gap-2">
+                    <span class="text-sm text-sky-400 font-bold mono"><span id="tokens-sec-text">0.0</span><span class="text-[10px] text-sky-500/70 ml-0.5">t/s</span></span>
+                    <span id="sparkline-chart" class="text-sky-500/40 text-[10px] tracking-[0.2em] mono h-4 overflow-hidden flex items-end"></span>
+                </div>
+            </div>
+            
+            <div class="flex flex-col w-48">
+                <div class="text-[9px] text-neutral-500 uppercase tracking-widest font-bold mb-1 flex justify-between items-center">
+                    <span>Session Cost</span>
+                    <span id="cache-badge" class="text-emerald-500 text-[8px] flex items-center gap-1 bg-emerald-500/10 px-1 rounded border border-emerald-500/20">
+                        <i class="fas fa-bolt text-[8px]"></i> Cache 0%
+                    </span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span id="cost-total" class="text-sm font-bold text-white mono">$0.00</span>
+                    <div class="flex flex-col gap-0.5">
+                        <span id="cost-main" class="text-[10px] text-neutral-500 mono bg-neutral-950 px-1.5 rounded border border-neutral-800">M: $0.000</span>
+                        <span id="cost-judge" class="text-[10px] text-neutral-500 mono bg-neutral-950 px-1.5 rounded border border-neutral-800">J: $0.000</span>
                     </div>
                 </div>
-                <div id="terminal" class="terminal-body">
-                    <!-- Logs will be injected here -->
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-5 z-10 w-auto">
+            <div class="flex flex-col items-end text-right">
+                <div class="text-[11px] text-neutral-400 font-semibold mb-1 flex items-center gap-1.5 truncate max-w-xs">
+                    <i class="fas fa-tag text-neutral-500 text-[10px]"></i>
+                    Cause: <span id="last-decision" class="text-amber-400 truncate max-w-[200px]">Initializing...</span>
                 </div>
-            </section>
-        </main>
+                
+                <div class="flex items-center gap-3 bg-neutral-950 border border-neutral-800 px-3 py-1.5 rounded-lg shadow-inner">
+                    <div class="flex items-center gap-2">
+                        <div id="status-dot" class="w-2 h-2 rounded-full bg-sky-500"></div>
+                        <span id="status-text" class="text-sm font-bold text-sky-500 uppercase tracking-wide">Idle</span>
+                    </div>
+                    <div class="w-px h-4 bg-neutral-700"></div>
+                    <div class="flex items-center gap-1 text-xs mono text-neutral-300">
+                        <span>B:<span id="batch-size">0</span></span><i id="batch-trend-icon" class="fas fa-minus text-neutral-500 text-[10px]"></i> 
+                    </div>
+                    <div class="w-px h-4 bg-neutral-700"></div>
+                    <div id="timer-text" class="flex items-center gap-1 text-sm mono font-bold text-white">
+                        --:--
+                    </div>
+                </div>
+            </div>
+
+            <div class="hidden sm:flex flex-col gap-1 pl-5 border-l border-neutral-800/50">
+                <div class="flex items-center gap-1.5 bg-neutral-950 border border-neutral-800 px-2.5 py-1 rounded-md shadow-inner">
+                    <div id="sync-dot" class="w-1.5 h-1.5 bg-emerald-500 rounded-full shadow-[0_0_6px_#10b981]"></div>
+                    <span id="sync-text" class="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">Sync</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex flex-col md:flex-row gap-4">
+
+        <!-- Terminal Logs -->
+        <div class="flex-1 min-w-0 bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden flex flex-col shadow-lg">
+            <button onclick="toggleSection('terminal-body', 'terminal-icon')" class="flex justify-between items-center w-full px-4 py-2 bg-neutral-800/50 hover:bg-neutral-800 transition-colors border-b border-neutral-800 focus:outline-none">
+                <div class="flex items-center gap-2 text-xs font-bold text-neutral-300 uppercase tracking-widest">
+                    <i class="fas fa-terminal text-emerald-500"></i> Terminal Logs
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="relative" onclick="event.stopPropagation();">
+                        <i class="fas fa-search absolute left-2 top-[7px] text-neutral-500 text-[10px]"></i>
+                        <input id="log-filter" type="text" placeholder="Filter logs..." class="bg-neutral-950 border border-neutral-700 rounded-md pl-6 pr-2 py-1 text-[11px] text-neutral-300 w-32 md:w-36 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-mono">
+                    </div>
+                    <i id="terminal-icon" class="fas fa-chevron-up text-neutral-500 text-xs transition-transform duration-200"></i>
+                </div>
+            </button>
+            <div id="terminal-body" class="p-4 mono text-[12px] leading-relaxed text-neutral-300 h-[250px] md:h-[450px] overflow-y-auto"></div>
+        </div>
+
+        <!-- Live Intercept Feed -->
+        <div class="flex-1 min-w-0 bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden flex flex-col shadow-lg">
+            <button onclick="toggleSection('subs-body', 'subs-icon')" class="flex justify-between items-center w-full px-4 py-2 bg-neutral-800/50 hover:bg-neutral-800 transition-colors border-b border-neutral-800 focus:outline-none">
+                <div class="flex items-center gap-2 text-xs font-bold text-neutral-300 uppercase tracking-widest">
+                    <i class="fas fa-closed-captioning text-sky-400"></i> Live Intercept Feed
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="text-[10px] text-neutral-500 font-medium">Currently viewing history</span>
+                    <i id="subs-icon" class="fas fa-chevron-down text-neutral-500 text-xs transition-transform duration-200"></i>
+                </div>
+            </button>
+            <div id="subs-body" class="hidden p-4 h-[300px] md:h-[450px] overflow-y-auto bg-neutral-950">
+                <div class="grid grid-cols-12 gap-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest border-b border-neutral-800 pb-2 mb-2">
+                    <div class="col-span-1 text-center">#</div>
+                    <div class="col-span-5">English Original</div>
+                    <div class="col-span-6 text-right">Hebrew Translated</div>
+                </div>
+                <div id="translation-feed-content"></div>
+            </div>
+        </div>
+
     </div>
 
     <script src="/web/app.js"></script>
+    <script>
+        function toggleSection(bodyId, iconId) {
+            const body = document.getElementById(bodyId);
+            const icon = document.getElementById(iconId);
+            if (body.classList.contains('hidden')) {
+                body.classList.remove('hidden');
+                icon.classList.remove('fa-chevron-down');
+                icon.classList.add('fa-chevron-up');
+            } else {
+                body.classList.add('hidden');
+                icon.classList.remove('fa-chevron-up');
+                icon.classList.add('fa-chevron-down');
+            }
+        }
+    </script>
 </body>
 </html>

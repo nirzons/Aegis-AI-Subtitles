@@ -1,25 +1,32 @@
 const elements = {
-    connectionStatus: document.getElementById('connection-status'),
-    statusText: document.querySelector('.status-text'),
     progressText: document.getElementById('progress-text'),
-    progressPercent: document.getElementById('progress-percent'),
-    progressFill: document.getElementById('progress-fill'),
-    timerLabel: document.getElementById('timer-label'),
+    progressPercent: document.getElementById('progress-percent'), // ADD THIS
+    progressFill: document.getElementById('progress-fill'),       // ADD THIS
     etaLabel: document.getElementById('eta-label'),
-    costDisplay: document.getElementById('cost-display'),
-    currentStatus: document.getElementById('current-status'),
-    finishTime: document.getElementById('finish-time'),
-    terminal: document.getElementById('terminal'),
-    autoscrollBtn: document.getElementById('autoscroll-btn'),
-    clearBtn: document.getElementById('clear-btn'),
-    translationFeed: document.getElementById('translation-feed'),
-    feedToggleBtn: document.getElementById('feed-toggle-btn'),
-    liveViewerSection: document.querySelector('.live-viewer-section')
+    tokensSecText: document.getElementById('tokens-sec-text'),
+    sparklineChart: document.getElementById('sparkline-chart'),
+    cacheBadge: document.getElementById('cache-badge'),
+    costTotal: document.getElementById('cost-total'),
+    costMain: document.getElementById('cost-main'),
+    costJudge: document.getElementById('cost-judge'),
+    lastDecision: document.getElementById('last-decision'),
+    statusDot: document.getElementById('status-dot'),
+    statusText: document.getElementById('status-text'),
+    batchSize: document.getElementById('batch-size'),
+    batchTrendIcon: document.getElementById('batch-trend-icon'),
+    timerText: document.getElementById('timer-text'),
+    syncDot: document.getElementById('sync-dot'),
+    syncText: document.getElementById('sync-text'),
+    
+    logFilter: document.getElementById('log-filter'),
+    terminalBody: document.getElementById('terminal-body'),
+    translationFeed: document.getElementById('translation-feed-content')
 };
 
 let socket = null;
-let isAutoscroll = true;
 let lastVersion = -1;
+let storedLogs = [];
+let prevBatchSize = 0;
 
 function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -28,111 +35,170 @@ function connect() {
     socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
-        console.log('Connected to Aegis WebSocket');
-        elements.connectionStatus.classList.remove('badge-error');
-        elements.connectionStatus.classList.add('badge-success');
-        elements.statusText.textContent = 'Connected';
+        elements.syncDot.classList.replace('bg-red-500', 'bg-emerald-500');
+        elements.syncDot.classList.replace('shadow-[0_0_6px_#ef4444]', 'shadow-[0_0_6px_#10b981]');
+        elements.syncText.classList.replace('text-red-500', 'text-emerald-500');
+        elements.syncText.textContent = 'SYNC';
     };
 
     socket.onmessage = (event) => {
+        elements.syncDot.style.opacity = '0.5';
+        setTimeout(() => elements.syncDot.style.opacity = '1', 150);
+
         const state = JSON.parse(event.data);
         updateUI(state);
     };
 
-    socket.onclose = () => {
-        console.log('Disconnected from Aegis WebSocket');
-        elements.connectionStatus.classList.remove('badge-success');
-        elements.connectionStatus.classList.add('badge-error');
-        elements.statusText.textContent = 'Disconnected';
-        
-        // Auto-reconnect after 2 seconds
-        setTimeout(connect, 2000);
-    };
+    socket.onerror = () => socket.close();
 
-    socket.onerror = (error) => {
-        console.error('WebSocket Error:', error);
-        socket.close();
+    socket.onclose = () => {
+        elements.syncDot.classList.replace('bg-emerald-500', 'bg-red-500');
+        elements.syncDot.classList.replace('shadow-[0_0_6px_#10b981]', 'shadow-[0_0_6px_#ef4444]');
+        elements.syncText.classList.replace('text-emerald-500', 'text-red-500');
+        elements.syncText.textContent = 'OFFLINE';
+        setTimeout(connect, 2000);
     };
 }
 
 function updateUI(state) {
-    // 1. Progress
+    // 1. Progress & ETA
     const p = state.progress;
-    elements.progressText.textContent = `${p.processed}/${p.total}`;
-    elements.progressPercent.textContent = `${p.percent}%`;
-    elements.progressFill.style.width = `${p.percent}%`;
-
-    // 2. Timer & ETA
-    elements.timerLabel.textContent = state.timer.label || '--:--';
-    elements.etaLabel.textContent = `ETA: ${state.eta.time_remaining || '--:--'}`;
-
-    // 3. Cost
-    elements.costDisplay.textContent = state.cost.display || '$0.00';
+    elements.progressText.innerHTML = `${p.processed}<span class="text-neutral-500 text-sm">/${p.total}</span>`;
+    elements.etaLabel.textContent = state.eta.time_remaining || '--:--';
     
-    // 4. Status
-    elements.currentStatus.textContent = state.status.text || 'Idle';
-    elements.currentStatus.style.color = state.status.color;
-    elements.finishTime.textContent = `Ends: ${state.eta.finish_time || '--:--'}`;
+    // ADD THESE TWO LINES:
+    if (elements.progressPercent) elements.progressPercent.textContent = `${p.percent}%`;
+    if (elements.progressFill) elements.progressFill.style.width = `${p.percent}%`;    
+    
+    if (state.telemetry) {
+        elements.tokensSecText.textContent = (state.telemetry.tokens_per_sec ?? 0).toFixed(1);
+        elements.sparklineChart.textContent = generateSparkline(state.telemetry.speed_history);
+        elements.cacheBadge.innerHTML = `<i class="fas fa-bolt text-[8px]"></i> Cache ${state.telemetry.cache_hit_percent}%`;
+        elements.costTotal.textContent = `$${(state.telemetry.cost_main + state.telemetry.cost_judge).toFixed(4)}`;
+        elements.costMain.textContent   = `M: $${state.telemetry.cost_main.toFixed(3)}`;
+        elements.costJudge.textContent  = `J: $${state.telemetry.cost_judge.toFixed(3)}`;
+    }
 
-    // 5. Logs & Segments
+    if (state.audit) {
+        elements.lastDecision.textContent = state.audit.last_decision || 'Active';
+
+        const sz = state.audit.batch_size;
+        elements.batchSize.textContent = sz;
+
+        // Only update the arrow when batch size actually changes.
+        // Ignoring same-size messages (e.g. from update_status) keeps the arrow
+        // visible until the next genuine size change — mirrors Tkinter's lbl_status.
+        if (sz > 0 && sz !== prevBatchSize) {
+            elements.batchTrendIcon.className = 'fas text-[10px] ';
+            if (prevBatchSize > 0 && sz > prevBatchSize)      elements.batchTrendIcon.className += 'fa-arrow-up text-emerald-400';
+            else if (prevBatchSize > 0 && sz < prevBatchSize) elements.batchTrendIcon.className += 'fa-arrow-down text-amber-400';
+            else                                               elements.batchTrendIcon.className += 'fa-minus text-neutral-500';
+            prevBatchSize = sz;
+        }
+    }
+
+    elements.timerText.innerHTML = state.timer.label || '--:--';
+    elements.statusText.textContent = state.status.text || 'Idle';
+    elements.statusText.style.color = state.status.color;
+    elements.statusDot.style.backgroundColor = state.status.color;
+    elements.statusDot.style.boxShadow = `0 0 8px ${state.status.color}`;
+
     if (state.version !== lastVersion) {
-        renderLogs(state.log_lines);
+        storedLogs = state.log_lines;
+        renderLogs();
         renderSegments(state.segments, state.upcoming);
         lastVersion = state.version;
     }
+}
+
+function generateSparkline(history) {
+    if (!history || history.length === 0) return '';
+    const ticks = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    const min = Math.min(...history);
+    const max = Math.max(...history);
+    const range = max - min || 1;
+    return history.map(val => {
+        const index = Math.floor(((val - min) / range) * (ticks.length - 1));
+        return ticks[index];
+    }).join('');
+}
+
+elements.logFilter.addEventListener('input', renderLogs);
+
+function renderLogs() {
+    const term = elements.terminalBody;
+    const filterText = elements.logFilter.value.toLowerCase();
+    
+    const filteredLines = filterText 
+        ? storedLogs.filter(line => line.toLowerCase().includes(filterText)) 
+        : storedLogs;
+
+    // Advanced Terminal Syntax Highlighting matching your screenshot
+    term.innerHTML = filteredLines.map(line => {
+        let escaped = escapeHtml(line);
+        
+        // Match specific tags and emojis from your backend
+        if (escaped.includes('✅')) {
+            escaped = `<span class="text-emerald-400">${escaped}</span>`;
+        } else if (escaped.includes('⚠️') || escaped.includes('Batch Failure')) {
+            escaped = `<span class="text-rose-400 font-bold">${escaped}</span>`;
+        } else if (escaped.includes('🔍') || escaped.includes('Auditor Flag')) {
+            escaped = `<span class="text-amber-400">${escaped}</span>`;
+        } else if (escaped.includes('🧹') || escaped.includes('Sanitizer')) {
+            escaped = `<span class="text-orange-400">${escaped}</span>`;
+        } else if (escaped.includes('💰') || escaped.includes('[Main Model]')) {
+            escaped = `<span class="text-sky-400">${escaped}</span>`;
+        } else if (escaped.includes('🔄')) {
+            escaped = `<span class="text-blue-400">${escaped}</span>`;
+        } else if (escaped.includes('🚀')) {
+            escaped = `<span class="text-emerald-300 font-semibold">${escaped}</span>`;
+        } else if (escaped.includes('SESSION RESUMED')) {
+            escaped = `<span class="text-neutral-500 font-bold tracking-widest">${escaped}</span>`;
+        } else if (escaped.includes('⌛') || escaped.includes('Sending Batch')) {
+            escaped = `<span class="text-neutral-500">${escaped}</span>`;
+        } else {
+            // Default coloring for unmatched text
+            escaped = `<span class="text-neutral-300">${escaped}</span>`;
+        }
+
+        return `<div>${escaped}</div>`;
+    }).join('');
+    
+    term.scrollTop = term.scrollHeight;
 }
 
 function renderSegments(segments, upcoming) {
     const feed = elements.translationFeed;
     if (!feed) return;
 
-    let html = '';
+    // subs-body is the actual scroll container (overflow-y-auto), not the inner content div
+    const scrollContainer = document.getElementById('subs-body');
 
-    // Completed segments (last 50)
+    let html = '';
+    
     segments.forEach(seg => {
         html += `
-            <div class="translation-row">
-                <div class="col-idx">${seg.index}</div>
-                <div class="col-eng">${escapeHtml(seg.eng)}</div>
-                <div class="col-heb">${seg.heb}</div>
-            </div>
-        `;
+        <div class="grid grid-cols-12 gap-4 items-center py-2 border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors">
+            <div class="col-span-1 text-center text-xs mono text-neutral-600">${seg.index}</div>
+            <div class="col-span-5 text-sm text-neutral-300 italic">"${escapeHtml(seg.eng)}"</div>
+            <div class="col-span-6 text-right text-[15px] font-semibold text-emerald-400" dir="rtl">"${escapeHtml(seg.heb)}"</div>
+        </div>`;
     });
 
-    // Upcoming (next 2)
     upcoming.forEach(up => {
         html += `
-            <div class="translation-row upcoming">
-                <div class="col-idx">${up.index}</div>
-                <div class="col-eng">${escapeHtml(up.text)}</div>
-                <div class="col-heb">Next up...</div>
-            </div>
-        `;
+        <div class="grid grid-cols-12 gap-4 items-center py-2 border-b border-neutral-800/50 opacity-50 border-dashed">
+            <div class="col-span-1 text-center text-xs mono text-neutral-600">${up.index}</div>
+            <div class="col-span-5 text-sm text-neutral-300 italic">"${escapeHtml(up.text)}"</div>
+            <div class="col-span-6 text-right text-sm font-semibold text-neutral-500">Next up...</div>
+        </div>`;
     });
 
-    const currentScroll = feed.scrollTop;
-    const isAtBottom = feed.scrollHeight - feed.scrollTop <= feed.clientHeight + 50;
-    
+    const isAtBottom = scrollContainer
+        ? scrollContainer.scrollHeight - scrollContainer.scrollTop <= scrollContainer.clientHeight + 50
+        : true;
     feed.innerHTML = html;
-
-    // Follow the bottom if was already at bottom (to see new translations)
-    if (isAtBottom) {
-        feed.scrollTop = feed.scrollHeight;
-    } else {
-        feed.scrollTop = currentScroll;
-    }
-}
-
-function renderLogs(lines) {
-    const term = elements.terminal;
-    
-    // Simple approach: Replace content to ensure alignment with the 500-line buffer
-    // For local use, this is fast enough.
-    term.innerHTML = lines.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join('');
-    
-    if (isAutoscroll) {
-        term.scrollTop = term.scrollHeight;
-    }
+    if (isAtBottom && scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
 }
 
 function escapeHtml(text) {
@@ -141,45 +207,4 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// User Interaction
-elements.autoscrollBtn.addEventListener('click', () => {
-    isAutoscroll = !isAutoscroll;
-    elements.autoscrollBtn.classList.toggle('active', isAutoscroll);
-    elements.autoscrollBtn.textContent = `Auto-scroll: ${isAutoscroll ? 'ON' : 'OFF'}`;
-});
-
-elements.clearBtn.addEventListener('click', () => {
-    elements.terminal.innerHTML = '';
-});
-
-// Detect manual scroll to pause autoscroll
-elements.terminal.addEventListener('scroll', () => {
-    const term = elements.terminal;
-    const isAtBottom = term.scrollHeight - term.scrollTop <= term.clientHeight + 10;
-    
-    if (!isAtBottom && isAutoscroll) {
-        // Optional: comment this out if you want strict button control
-        // isAutoscroll = false;
-        // elements.autoscrollBtn.classList.remove('active');
-        // elements.autoscrollBtn.textContent = 'Auto-scroll: OFF';
-    }
-});
-
-// Feed Toggle
-if (elements.feedToggleBtn) {
-    const toggleText = elements.feedToggleBtn.querySelector('.toggle-text');
-    const isCollapsed = localStorage.getItem('aegis-feed-collapsed') === 'true';
-    if (isCollapsed) {
-        elements.liveViewerSection.classList.add('collapsed');
-        if (toggleText) toggleText.textContent = 'Expand';
-    }
-
-    elements.feedToggleBtn.addEventListener('click', () => {
-        const collapsed = elements.liveViewerSection.classList.toggle('collapsed');
-        if (toggleText) toggleText.textContent = collapsed ? 'Expand' : 'Minimize';
-        localStorage.setItem('aegis-feed-collapsed', collapsed);
-    });
-}
-
-// Initialize
 connect();

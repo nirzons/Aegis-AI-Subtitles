@@ -58,15 +58,16 @@ class TranslatorApp:
         self.session_log_file = os.path.join(self.logs_dir, f"session_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
         self.available_checkpoints = []
 
-        # UI & Engine Initialization
-        self.ui = MainUILayout(self.root)
-        self.ui.setup(self)
-        self.engine = TranslationEngine(self.log_queue, self.ui_queue)
-        
-        # Web GUI State
+        # Web GUI State (Moved UP so the engine can access it)
         self.shared_state = SharedState()
         self.web_server_started = False
 
+        # UI & Engine Initialization
+        self.ui = MainUILayout(self.root)
+        self.ui.setup(self)
+        
+        # Pass the shared_state object into the engine
+        self.engine = TranslationEngine(self.log_queue, self.ui_queue, shared_state=self.shared_state)
         # Initial Actions
         self.refresh_files()
         self.refresh_models_ui()
@@ -322,6 +323,13 @@ class TranslatorApp:
                 
                 self.ui.widgets.lbl_status.config(text=f"📦 Size: {self.last_batch_size}{arrow}")
 
+                # Update Web Dashboard
+                if self.ui.widgets.web_gui_var.get():
+                    if self.current_is_retry:
+                        self.shared_state.update_status("Translating (Retry)", "#f59e0b") # Amber
+                    else:
+                        self.shared_state.update_status("Translating", "#0ea5e9") # Sky Blue
+
                 # Choose history based on retry status
                 history = self.perf_history_new
                 if self.current_is_retry:
@@ -376,14 +384,10 @@ class TranslatorApp:
                 self.ui.widgets.lbl_status.config(text=f"⚖️ JUDGING {c}/{t}...", fg="#9b59b6")
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_status(f"⚖️ JUDGING {c}/{t}...", "#9b59b6")
-            elif type == "judge_stop":
-                self.ui.widgets.lbl_status.config(text=f"📦 Size: {self.last_batch_size}", fg="#3498db")
-                if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_status(f"📦 Size: {self.last_batch_size}", "#3498db")
-            elif type == "batch_success": # I should add this signal to engine
+            elif type == "batch_success": 
                 self.ui.widgets.lbl_status.config(text="")
                 if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_status("Processing...")
+                    self.shared_state.update_status("Saving Batch...", "#10b981") # Emerald
             elif type == "cost":
                 self.ui.widgets.lbl_cost.config(text=format_cost_display(data[0], data[1]))
                 if self.ui.widgets.web_gui_var.get():
