@@ -375,6 +375,8 @@ class TranslatorApp:
 
                 self.resp_timer_seconds = -1
                 self.ui.widgets.lbl_timer.config(text="")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_timer("")
             elif type == "judge_start":
                 self.ui.widgets.lbl_status.config(text="⚖️ JUDGING...", fg="#9b59b6")
                 if self.ui.widgets.web_gui_var.get():
@@ -405,6 +407,7 @@ class TranslatorApp:
                 self._toggle_ui_state(tk.NORMAL)
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.set_running(False)
+                    self.shared_state.update_timer("")
             elif type == "refresh":
                 self.refresh_files()
 

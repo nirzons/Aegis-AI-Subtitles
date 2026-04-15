@@ -15,6 +15,7 @@ const elements = {
     batchSize: document.getElementById('batch-size'),
     batchTrendIcon: document.getElementById('batch-trend-icon'),
     timerText: document.getElementById('timer-text'),
+    timerDivider: document.getElementById('timer-divider'),
     syncDot: document.getElementById('sync-dot'),
     syncText: document.getElementById('sync-text'),
     
@@ -71,12 +72,19 @@ function updateUI(state) {
     if (elements.progressFill) elements.progressFill.style.width = `${p.percent}%`;    
     
     if (state.telemetry) {
+        const formatCost = (val, dec) => {
+            if (val > 100) return Math.floor(val).toLocaleString();
+            return '$' + val.toFixed(dec);
+        };
+
+        const total = state.telemetry.cost_main + state.telemetry.cost_judge;
         elements.tokensSecText.textContent = (state.telemetry.tokens_per_sec ?? 0).toFixed(1);
         elements.sparklineChart.textContent = generateSparkline(state.telemetry.speed_history);
         elements.cacheBadge.innerHTML = `<i class="fas fa-bolt text-[8px]"></i> Cache ${state.telemetry.cache_hit_percent}%`;
-        elements.costTotal.textContent = `$${(state.telemetry.cost_main + state.telemetry.cost_judge).toFixed(4)}`;
-        elements.costMain.textContent   = `M: $${state.telemetry.cost_main.toFixed(3)}`;
-        elements.costJudge.textContent  = `J: $${state.telemetry.cost_judge.toFixed(3)}`;
+        
+        elements.costTotal.textContent = formatCost(total, 4);
+        elements.costMain.textContent  = `M: ${formatCost(state.telemetry.cost_main, 3)}`;
+        elements.costJudge.textContent = `J: ${formatCost(state.telemetry.cost_judge, 3)}`;
     }
 
     if (state.audit) {
@@ -97,7 +105,14 @@ function updateUI(state) {
         }
     }
 
-    elements.timerText.innerHTML = state.timer.label || '--:--';
+    const timerLabel = state.timer.label || '';
+    elements.timerText.innerHTML = timerLabel;
+    
+    // Hide timer and divider if label is empty (e.g. during Judging or Idle)
+    const isVisible = !!timerLabel;
+    elements.timerText.classList.toggle('hidden', !isVisible);
+    if (elements.timerDivider) elements.timerDivider.classList.toggle('hidden', !isVisible);
+
     elements.statusText.textContent = state.status.text || 'Idle';
     elements.statusText.style.color = state.status.color;
     elements.statusDot.style.backgroundColor = state.status.color;
