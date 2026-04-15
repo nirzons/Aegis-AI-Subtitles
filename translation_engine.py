@@ -421,7 +421,8 @@ class TranslationEngine:
                             
                             # MAIN MODEL Cost Calculation
                             discount = model_cfg.get('cache_discount', 0.0)
-                            
+                            hit_pct = 0  # default; overwritten below when cache discount is active
+
                             if discount > 0 and in_tokens > 0:
                                 miss_tokens = in_tokens - cached_tokens
                                 # Calculate discounted price based on the percentage provided in settings

@@ -1,11 +1,24 @@
 import asyncio
 import uvicorn
 import threading
+import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from shared_state import SharedState
 import os
+
+# Fixed file for web server connection events (keeps terminal clean)
+_WEB_LOG = os.path.join(os.path.dirname(__file__), "web_server.log")
+
+def _wlog(msg: str):
+    """Append a timestamped connection event to web_server.log only (not terminal)."""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(_WEB_LOG, 'a', encoding='utf-8') as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass  # Never crash the web server over a log write failure
 
 def create_app(shared_state: SharedState, log_queue=None):
     app = FastAPI(title="Aegis Web Dashboard")
@@ -28,8 +41,7 @@ def create_app(shared_state: SharedState, log_queue=None):
         
         # Track connection
         shared_state.change_active_clients(1)
-        if log_queue:
-            log_queue.put(f"🌐 [Web GUI] New client connected. Total: {shared_state.active_clients}")
+        _wlog(f"🌐 [Web GUI] New client connected. Total: {shared_state.active_clients}")
             
         # Send initial snapshot immediately
         await websocket.send_json(shared_state.snapshot())
@@ -52,8 +64,8 @@ def create_app(shared_state: SharedState, log_queue=None):
                 log_queue.put(f"⚠️ [Web GUI] WebSocket error: {e}")
         finally:
             shared_state.change_active_clients(-1)
-            if log_queue:
-                log_queue.put(f"🌐 [Web GUI] Client disconnected. Total: {shared_state.active_clients}")
+            _wlog(f"🌐 [Web GUI] Client disconnected. Total: {shared_state.active_clients}")
+
 
     # Mount static assets (css, js)
     app.mount("/web", StaticFiles(directory=static_dir), name="static")
