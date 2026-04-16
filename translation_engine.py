@@ -802,10 +802,10 @@ class TranslationEngine:
                             json.dump(checkpoint_data, ckpt_f, ensure_ascii=False, indent=4)
                     
                     total_elapsed = stats.get("total_elapsed_seconds", 0.0)
-                    time_str, finish_str = get_eta_string(total_elapsed, processed, processed, total_blocks)
+                    time_str, finish_str, eta_secs = get_eta_string(total_elapsed, processed, processed, total_blocks)
 
                     self.ui_queue.put(("progress", (processed, total_blocks)))
-                    self.ui_queue.put(("eta", (time_str, finish_str)))
+                    self.ui_queue.put(("eta", (time_str, finish_str, eta_secs)))
                         
             if not self.should_stop:
                 log(self.log_queue, session_log_file, f"\n✅ Translation Complete!")

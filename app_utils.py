@@ -49,7 +49,7 @@ def get_eta_string(elapsed_time, session_processed, processed, total_blocks):
     minutes = int((eta_seconds % 3600) // 60)
     seconds = int(eta_seconds % 60)
 
-    time_str = f"{minutes}m {seconds}s"
+    time_str = f"{minutes}m {seconds:02d}s"
     if hours > 0 or days > 0:
         time_str = f"{hours}h " + time_str
     if days > 0:
@@ -58,7 +58,7 @@ def get_eta_string(elapsed_time, session_processed, processed, total_blocks):
     finish_time = datetime.datetime.now() + datetime.timedelta(seconds=eta_seconds)
     finish_str = finish_time.strftime("%H:%M")
     
-    return time_str, finish_str
+    return time_str, finish_str, int(eta_seconds)
 
 def strip_srt(blocks_list):
     """Strips SRT indices and timestamps, returning only the text content."""

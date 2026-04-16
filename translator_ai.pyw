@@ -41,6 +41,8 @@ class TranslatorApp:
         self.previous_batch_size = -1
         self.num_batches_processed = 0
         self.est_remaining = -1
+        self.total_eta_seconds = -1
+        self.last_finish_time_str = "--:--"
         self.current_is_retry = False
         self._timer_after_id = None
         
@@ -124,7 +126,11 @@ class TranslatorApp:
         
         # Calculate and show immediate ETA from checkpoint stats
         elapsed = stats.get("total_elapsed_seconds", 0.0)
-        time_str, finish_str = get_eta_string(elapsed, processed, processed, total)
+        time_str, finish_str, eta_secs = get_eta_string(elapsed, processed, processed, total)
+        
+        self.total_eta_seconds = eta_secs
+        self.last_finish_time_str = finish_str
+
         if processed > 0:
             self.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
         else:
@@ -330,9 +336,12 @@ class TranslatorApp:
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_progress(p, t)
             elif type == "eta":
-                self.ui.widgets.lbl_eta.config(text=f"ETA: {data[0]} | End: {data[1]}")
+                time_str, finish_str, eta_secs = data
+                self.total_eta_seconds = eta_secs
+                self.last_finish_time_str = finish_str
+                self.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
                 if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_eta(data[0], data[1])
+                    self.shared_state.update_eta(time_str, finish_str)
             elif type == "timer_start":
                 # Safety: Cancel any existing timer loop before starting a new one
                 if hasattr(self, '_timer_after_id') and self._timer_after_id:
@@ -550,12 +559,33 @@ class TranslatorApp:
         sec = s % 60
         return f"{m}:{sec:02d}"
 
+    def _fmt_eta_full(self, seconds):
+        if seconds <= 0: return "0s"
+        d = seconds // 86400
+        h = (seconds % 86400) // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        parts = []
+        if d: parts.append(f"{d}d")
+        if h: parts.append(f"{h}h")
+        if m: parts.append(f"{m}m")
+        parts.append(f"{s:02d}s")
+        return " ".join(parts)
+
     def _tick_timer(self):
         if self.resp_timer_seconds >= 0:
             self.resp_timer_seconds += 1
             if self.est_remaining > 0:
                 self.est_remaining -= 1
             
+            # Dynamic ETA Countdown
+            if self.total_eta_seconds > 0:
+                self.total_eta_seconds -= 1
+                new_eta_str = self._fmt_eta_full(self.total_eta_seconds)
+                self.ui.widgets.lbl_eta.config(text=f"ETA: {new_eta_str} | End: {self.last_finish_time_str}")
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_eta(new_eta_str, self.last_finish_time_str)
+
             tag = "🔄 RETRY " if getattr(self, 'current_is_retry', False) else ""
             est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
             timer_text = f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}"
