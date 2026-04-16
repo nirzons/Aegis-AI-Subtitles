@@ -103,6 +103,12 @@ class TranslatorApp:
         self.ui.widgets.btn_start.config(text="Start Translation")
         self.ui.widgets.srt_combo.config(state="readonly")
         self.ui.widgets.sysprm_combo.unbind("<<ComboboxSelected>>")
+        
+        # Reset Web GUI
+        if self.ui.widgets.web_gui_var.get():
+            self.shared_state.update_progress(0, 0)
+            self.shared_state.update_eta("--:--", "--:--")
+            self.shared_state.update_cost(0.0, 0.0, display_text="Cost: $0.00")
 
     def _update_ui_from_checkpoint(self, ckpt):
         processed, total = ckpt.get("processed", 0), ckpt.get("total_blocks", 0)
@@ -123,6 +129,13 @@ class TranslatorApp:
             self.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
         else:
             self.ui.widgets.lbl_eta.config(text="ETA: --:--")
+
+        # Sync with Web Dashboard
+        if self.ui.widgets.web_gui_var.get():
+            self.shared_state.update_progress(processed, total)
+            self.shared_state.update_eta(time_str if processed > 0 else "--:--", finish_str if processed > 0 else "--:--")
+            self.shared_state.update_cost(ckpt.get("total_main_cost", 0.0), ckpt.get("total_judge_cost", 0.0), 
+                                         display_text=self.ui.widgets.lbl_cost.cget("text"))
         # ──────────────────────────────────
         
         self.ui.widgets.srt_var.set(ckpt.get("srt_file", ""))
