@@ -13,7 +13,7 @@ from tkinter import messagebox, ttk
 from settings import SETTINGS
 from llm_api import is_process_alive
 from gui_windows import LiveViewer, SettingsWindow, CheckpointsWindow
-from app_utils import log, format_cost_display
+from app_utils import log, format_cost_display, get_eta_string
 from ui_layout import MainUILayout
 from translation_engine import TranslationEngine
 
@@ -110,6 +110,20 @@ class TranslatorApp:
         self.ui.widgets.progress_var.set(pct)
         self.ui.widgets.lbl_progress.config(text=f"Progress: {processed}/{total} ({pct:.1f}%)")
         self.ui.widgets.lbl_cost.config(text=format_cost_display(ckpt.get("total_main_cost", 0.0), ckpt.get("total_judge_cost", 0.0)))
+
+        # ── Persistent Performance & ETA ──
+        stats = ckpt.get("stats", {})
+        self.perf_history_new = list(stats.get("llm_call_times_new", []))
+        self.perf_history_retry = list(stats.get("llm_call_times_retry", []))
+        
+        # Calculate and show immediate ETA from checkpoint stats
+        elapsed = stats.get("total_elapsed_seconds", 0.0)
+        time_str, finish_str = get_eta_string(elapsed, processed, processed, total)
+        if processed > 0:
+            self.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
+        else:
+            self.ui.widgets.lbl_eta.config(text="ETA: --:--")
+        # ──────────────────────────────────
         
         self.ui.widgets.srt_var.set(ckpt.get("srt_file", ""))
         self.ui.widgets.sysprm_var.set(ckpt.get("sys_file", ""))

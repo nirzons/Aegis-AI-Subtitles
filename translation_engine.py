@@ -801,8 +801,8 @@ class TranslationEngine:
                         with open(current_checkpoint_file, 'w', encoding='utf-8') as ckpt_f:
                             json.dump(checkpoint_data, ckpt_f, ensure_ascii=False, indent=4)
                     
-                    elapsed = time.time() - start_time
-                    time_str, finish_str = get_eta_string(elapsed, session_processed, processed, total_blocks)
+                    total_elapsed = stats.get("total_elapsed_seconds", 0.0)
+                    time_str, finish_str = get_eta_string(total_elapsed, processed, processed, total_blocks)
 
                     self.ui_queue.put(("progress", (processed, total_blocks)))
                     self.ui_queue.put(("eta", (time_str, finish_str)))
