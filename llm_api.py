@@ -137,7 +137,7 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
         return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens, reasoning_tokens
     
     elif model_cfg['provider'] == 'lmstudio':
-        client = OpenAI(api_key=api_key, base_url="http://localhost:1234/v1", timeout=3600.0)
+        client = OpenAI(api_key=api_key, base_url="http://localhost:1234/v1", timeout=2700.0, max_retries=0)
         final_llm_input = (
             "### הנחיות וכללים ###\n"
             f"{system_prompt}\n\n"

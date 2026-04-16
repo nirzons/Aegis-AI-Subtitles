@@ -149,6 +149,7 @@ function renderLogs() {
         : storedLogs;
 
     // Advanced Terminal Syntax Highlighting matching your screenshot
+    const isAtBottom = term.scrollHeight - term.scrollTop <= term.clientHeight + 80;
     term.innerHTML = filteredLines.map(line => {
         let escaped = escapeHtml(line);
         
@@ -179,7 +180,7 @@ function renderLogs() {
         return `<div>${escaped}</div>`;
     }).join('');
     
-    term.scrollTop = term.scrollHeight;
+    if (isAtBottom) term.scrollTop = term.scrollHeight;
 }
 
 function renderSegments(segments, upcoming) {
