@@ -286,7 +286,7 @@ class TranslationEngine:
 
             self.ui_queue.put(("progress", (processed, total_blocks)))
 
-            # Pre-seed web dashboard with checkpoint costs and historical speed on resume
+            # Pre-seed web dashboard and desktop GUI with historical context on resume
             if resume_mode:
                 historical_speed = 0.0
                 all_calls = stats.get("llm_call_times_new", []) + stats.get("llm_call_times_retry", [])
@@ -295,7 +295,9 @@ class TranslationEngine:
                 if total_duration > 0:
                     historical_speed = total_load / total_duration
                 
-                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost, historical_speed)))
+                # Update both dashboards immediately
+                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+                self.ui_queue.put(("pipeline_telemetry", historical_speed))
                 
                 if self.shared_state:
                     self.shared_state.update_cost(total_main_cost, total_judge_cost)

@@ -473,10 +473,6 @@ class TranslatorApp:
 
                 self.ui.widgets.lbl_cost.config(text=format_cost_display(main_cost, judge_cost))
                 
-                # Update Live Speed Telemetry (Per-call)
-                if tokens_per_sec > 0:
-                    self.ui.widgets.lbl_speed.config(text=f"{tokens_per_sec:.1f} ch/s")
-
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_cost(main_cost, judge_cost, display_text=self.ui.widgets.lbl_cost.cget("text"))
             elif type == "pipeline_telemetry":
