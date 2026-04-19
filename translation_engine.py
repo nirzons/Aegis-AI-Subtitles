@@ -455,7 +455,9 @@ class TranslationEngine:
                         try:
                             log(self.log_queue, session_log_file, f"⏳ Sending Batch (Indices: {indices[0]}-{indices[-1]} | cues: {expected_count}, stride: {current_batch_size})...")
                             is_retry = (len(attempted_strides) > 1)
-                            self.ui_queue.put(("timer_start", (expected_count, is_retry)))
+                            # Calculate load (total character count of English text)
+                            batch_load = sum(len(str(val)) for val in input_payload.values())
+                            self.ui_queue.put(("timer_start", {"size": len(input_payload), "load": batch_load, "is_retry": is_retry}))
 
                             # V3 Audit Hook: Active Batch & Status
                             if self.shared_state:
@@ -500,12 +502,12 @@ class TranslationEngine:
                             # ── Record LLM call duration ───────────────────
                             _call_duration = time.time() - batch_call_start
                             if is_retry:
-                                stats["llm_call_times_retry"].append((_call_duration, current_batch_size))
+                                stats["llm_call_times_retry"].append((_call_duration, batch_load))
                             else:
-                                stats["llm_call_times_new"].append((_call_duration, current_batch_size))
+                                stats["llm_call_times_new"].append((_call_duration, batch_load))
                             # ──────────────────────────────────────────────
 
-                            self.ui_queue.put(("timer_stop", None))
+                            self.ui_queue.put(("timer_stop", batch_load))
                             
                             # MAIN MODEL Cost Calculation
                             discount = model_cfg.get('cache_discount', 0.0)
@@ -533,7 +535,7 @@ class TranslationEngine:
                             total_main_cost += batch_cost
                             
                             # Immediate GUI update
-                            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+                            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost, tokens_per_sec)))
                             
                             # Immediate Terminal logging
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
@@ -769,7 +771,7 @@ class TranslationEngine:
                                 total_judge_cost += j_cost
                                 
                                 # Immediate GUI update
-                                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+                                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost, 0)))
                                 
                                 # Immediate Terminal logging
                                 log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}{j_brain_str}) | Total Judge: {fmt_val(total_judge_cost)}")

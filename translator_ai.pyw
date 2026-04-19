@@ -6,6 +6,7 @@ import json
 import subprocess
 import threading
 import queue
+from collections import deque
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -46,8 +47,10 @@ class TranslatorApp:
         self.perf_history_judge = []
         self.current_judge_chunk_size = 0
         self.current_is_retry = False
+        self.speed_history = deque(maxlen=10) # Last 10 batches for sparkline
         self.active_phase = None # "main" or "judge"
         self._timer_after_id = None
+        self.mlr_activated = False # Track if we've logged the MLR switch
         
         # Directories
         self.curr_dir = os.getcwd()
@@ -346,15 +349,25 @@ class TranslatorApp:
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_eta(time_str, finish_str)
             elif type == "timer_start":
+                # data is expected to be a dict: {"size": n, "load": chars, "is_retry": bool}
+                # Handle legacy tuples just in case
+                if isinstance(data, dict):
+                    self.last_batch_size = data.get("size", 1)
+                    self.last_batch_load = data.get("load", 1)
+                    self.current_is_retry = data.get("is_retry", False)
+                else:
+                    self.last_batch_size = data[0] if isinstance(data, tuple) else data
+                    self.last_batch_load = self.last_batch_size * 50
+                    self.current_is_retry = False
+
                 # Safety: Cancel any existing timer loop before starting a new one
                 if hasattr(self, '_timer_after_id') and self._timer_after_id:
                     self.root.after_cancel(self._timer_after_id)
                     self._timer_after_id = None
 
-                self.last_batch_size, self.current_is_retry = data
                 self.resp_timer_seconds = 0
                 self.active_phase = "main"
-                
+
                 # Batch Size Change detection
                 arrow = ""
                 if self.num_batches_processed > 0 and self.previous_batch_size > 0:
@@ -379,38 +392,20 @@ class TranslatorApp:
                         history = self.perf_history_new
 
                 # Calculate estimation
-                self.est_remaining = -1
-                n = len(history)
-                if n >= 2:
-                    sum_x = sum(h[1] for h in history)
-                    sum_y = sum(h[0] for h in history)
-                    sum_xy = sum(h[0] * h[1] for h in history)
-                    sum_x2 = sum(h[1]**2 for h in history)
-                    denominator = (n * sum_x2 - sum_x**2)
-                    if denominator != 0:
-                        a = (n * sum_xy - sum_x * sum_y) / denominator
-                        b = (sum_y - a * sum_x) / n
-                        a = max(0.1, a) 
-                        self.est_remaining = int(max(5, b + a * self.last_batch_size))
-                    else:
-                        avg_sec = sum_y / sum_x
-                        self.est_remaining = int(avg_sec * self.last_batch_size)
-                elif n == 1:
-                    avg_sec = history[0][0] / history[0][1]
-                    self.est_remaining = int(avg_sec * self.last_batch_size)
+                self.est_remaining = self._calculate_estimation(history, self.last_batch_size, self.last_batch_load, min_val=5)
                 
                 est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining > 0 else ""
                 tag = "🔄 RETRY " if self.current_is_retry else ""
                 self.ui.widgets.lbl_timer.config(text=f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
                 self._tick_timer()
             elif type == "timer_stop":
-                if self.resp_timer_seconds > 0 and hasattr(self, 'last_batch_size'):
+                load = data if isinstance(data, (int, float)) else getattr(self, 'last_batch_load', self.last_batch_size * 50)
+                if self.resp_timer_seconds > 0:
                     if getattr(self, 'current_is_retry', False):
-                        self.perf_history_retry.append((self.resp_timer_seconds, self.last_batch_size))
+                        self.perf_history_retry.append((self.resp_timer_seconds, load))
                     else:
-                        self.perf_history_new.append((self.resp_timer_seconds, self.last_batch_size))
+                        self.perf_history_new.append((self.resp_timer_seconds, load))
                     
-                    self.previous_batch_size = self.last_batch_size
                     self.num_batches_processed += 1
 
                 self.resp_timer_seconds = -1
@@ -424,38 +419,26 @@ class TranslatorApp:
                     self.root.after_cancel(self._timer_after_id)
                     self._timer_after_id = None
 
-                self.current_judge_chunk_size = data
+                if isinstance(data, dict):
+                    self.current_judge_chunk_size = data.get("size", 1)
+                    self.current_judge_chunk_load = data.get("load", 1)
+                else:
+                    self.current_judge_chunk_size = data
+                    self.current_judge_chunk_load = data * 100 # Judge load is usually higher
+
                 self.resp_timer_seconds = 0
                 self.active_phase = "judge"
 
                 # Calculate estimation for judge chunk
-                self.est_remaining = -1
-                history = self.perf_history_judge
-                n = len(history)
-                if n >= 2:
-                    sum_x = sum(h[1] for h in history)
-                    sum_y = sum(h[0] for h in history)
-                    sum_xy = sum(h[0] * h[1] for h in history)
-                    sum_x2 = sum(h[1]**2 for h in history)
-                    denominator = (n * sum_x2 - sum_x**2)
-                    if denominator != 0:
-                        a = (n * sum_xy - sum_x * sum_y) / denominator
-                        b = (sum_y - a * sum_x) / n
-                        a = max(0.1, a)
-                        self.est_remaining = int(max(2, b + a * self.current_judge_chunk_size))
-                    else:
-                        avg_sec = sum_y / sum_x
-                        self.est_remaining = int(avg_sec * self.current_judge_chunk_size)
-                elif n == 1:
-                    avg_sec = history[0][0] / history[0][1]
-                    self.est_remaining = int(avg_sec * self.current_judge_chunk_size)
+                self.est_remaining = self._calculate_estimation(self.perf_history_judge, self.current_judge_chunk_size, self.current_judge_chunk_load, min_val=2)
 
                 est_str = f" / ⚖️ Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining > 0 else ""
                 self.ui.widgets.lbl_timer.config(text=f"⚖️ {self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
                 self._tick_timer()
             elif type == "judge_timer_stop":
-                if self.resp_timer_seconds > 0 and getattr(self, 'current_judge_chunk_size', 0) > 0:
-                    self.perf_history_judge.append((self.resp_timer_seconds, self.current_judge_chunk_size))
+                load = data if isinstance(data, (int, float)) else getattr(self, 'current_judge_chunk_load', self.current_judge_chunk_size * 100)
+                if self.resp_timer_seconds > 0:
+                    self.perf_history_judge.append((self.resp_timer_seconds, load))
                 
                 self.resp_timer_seconds = -1
                 self.active_phase = None
@@ -482,9 +465,24 @@ class TranslatorApp:
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_status("Saving Batch...", "#10b981") # Emerald
             elif type == "cost":
-                self.ui.widgets.lbl_cost.config(text=format_cost_display(data[0], data[1]))
+                # Robust unpacking: handle 2-item (legacy) or 3-item (MLR) signals
+                if len(data) == 3:
+                    main_cost, judge_cost, tokens_per_sec = data
+                else:
+                    main_cost, judge_cost = data
+                    tokens_per_sec = 0
+
+                self.ui.widgets.lbl_cost.config(text=format_cost_display(main_cost, judge_cost))
+                
+                # Update Speed Telemetry
+                if tokens_per_sec > 0:
+                    self.speed_history.append(tokens_per_sec)
+                    spark = self._generate_sparkline(list(self.speed_history))
+                    self.ui.widgets.lbl_speed.config(text=f"{tokens_per_sec:.1f} t/s")
+                    self.ui.widgets.lbl_sparkline.config(text=spark)
+
                 if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_cost(data[0], data[1], display_text=self.ui.widgets.lbl_cost.cget("text"))
+                    self.shared_state.update_cost(main_cost, judge_cost, display_text=self.ui.widgets.lbl_cost.cget("text"))
             elif type == "segment":
                 if self.ui.widgets.web_gui_var.get():
                     idx, time_val, eng, heb = data
@@ -626,6 +624,45 @@ class TranslatorApp:
         if m: parts.append(f"{m}m")
         parts.append(f"{s:02d}s")
         return " ".join(parts)
+
+    def _generate_sparkline(self, history):
+        if not history: return ""
+        ticks = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+        m_min = min(history)
+        m_max = max(history)
+        m_range = m_max - m_min if m_max != m_min else 1
+        
+        res = ""
+        for val in history:
+            idx = int(((val - m_min) / m_range) * (len(ticks) - 1))
+            res += ticks[idx]
+        return res
+
+    def _calculate_estimation(self, history, current_size, current_load=0, min_val=5):
+        """
+        Calculates time estimation using Smart 2D Linear Regression (Time = a * Load + b).
+        """
+        data = list(history) # Each entry is (duration, load)
+        n = len(data)
+        if n == 0: return -1
+
+        if n >= 2:
+            sum_x = sum(d[1] for d in data)
+            sum_y = sum(d[0] for d in data)
+            sum_xy = sum(d[1] * d[0] for d in data)
+            sum_x2 = sum(d[1]**2 for d in data)
+            denominator = (n * sum_x2 - sum_x**2)
+            if denominator != 0:
+                a_coeff = (n * sum_xy - sum_x * sum_y) / denominator
+                b_coeff = (sum_y - a_coeff * sum_x) / n
+                a_coeff = max(0.005, a_coeff) # Cap: min seconds per character
+                return int(max(min_val, b_coeff + a_coeff * current_load))
+            else:
+                return int(max(min_val, (sum_y / sum_x) * current_load)) if sum_x > 0 else -1
+        elif n == 1:
+            return int(max(min_val, (data[0][0] / data[0][1]) * current_load)) if data[0][1] > 0 else -1
+        
+        return -1
 
     def _tick_timer(self):
         if self.resp_timer_seconds >= 0:

@@ -513,12 +513,16 @@ TRANSLATED (HEBREW):
 
             
             if ui_queue:
-                ui_queue.put(("judge_timer_start", len(chunk_indices)))
+                chunk_load = 0
+                for idx_c in chunk_indices:
+                    chunk_load += len(str(eng_dict.get(idx_c, "")))
+                    chunk_load += len(str(heb_dict.get(idx_c, "")))
+                ui_queue.put(("judge_timer_start", {"size": len(chunk_indices), "load": chunk_load}))
 
             raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(judge_model_cfg, system_prompt, user_prompt, api_key, indices_list=chunk_indices, is_judge=True)
             
             if ui_queue:
-                ui_queue.put(("judge_timer_stop", None))
+                ui_queue.put(("judge_timer_stop", chunk_load))
             
             if file_log_func:
                 file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{raw_res}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
