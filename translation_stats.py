@@ -140,6 +140,9 @@ def print_stats(stats, total_blocks, total_main_cost, total_judge_cost,
     avg_new     = (sum(t[0] for t in new_times)   / len(new_times))   if new_times   else 0
     avg_retry   = (sum(t[0] for t in retry_times) / len(retry_times)) if retry_times else 0
 
+    total_chars = sum(t[1] for t in new_times)
+    global_avg_speed = (total_chars / total_secs) if total_secs > 0 else 0
+
     total_attempted = stats.get("total_batches_attempted", 0)
     total_succeeded = stats.get("total_batches_succeeded", 0)
     total_retries   = stats.get("total_retries", 0)
@@ -176,6 +179,8 @@ def print_stats(stats, total_blocks, total_main_cost, total_judge_cost,
         "",
         div("⏱️  Time"),
         f"  Total Wall Time:         {fmt_time(total_secs)}",
+        f"  Total Characters:        {total_chars:,} ch",
+        f"  Global Speed Average:    {global_avg_speed:.1f} ch/s",
         f"  Total Blocks:            {total_blocks}",
         f"  Avg Time / Block:        {avg_block:.1f} sec",
         f"  Avg Time / New Batch:    {avg_new:.1f} sec  ({len(new_times)} batches)",
