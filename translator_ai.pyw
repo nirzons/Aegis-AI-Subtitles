@@ -338,15 +338,11 @@ class TranslatorApp:
                 p, t = data
                 self.ui.widgets.progress_var.set((p/t*100) if t else 0)
                 self.ui.widgets.lbl_progress.config(text=f"Progress: {p}/{t} ({(p/t*100) if t else 0:.1f}%)")
-                if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_progress(p, t)
             elif type == "eta":
                 time_str, finish_str, eta_secs = data
                 self.total_eta_seconds = eta_secs
                 self.last_finish_time_str = finish_str
                 self.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
-                if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_eta(time_str, finish_str)
             elif type == "timer_start":
                 # data is expected to be a dict: {"size": n, "load": chars, "is_retry": bool}
                 # Handle legacy tuples just in case
@@ -472,19 +468,12 @@ class TranslatorApp:
                     tokens_per_sec = 0
 
                 self.ui.widgets.lbl_cost.config(text=format_cost_display(main_cost, judge_cost))
-                
-                if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_cost(main_cost, judge_cost, display_text=self.ui.widgets.lbl_cost.cget("text"))
             elif type == "pipeline_telemetry":
                 # data is pipeline_velocity (ch/s for the entire successful batch)
                 if data > 0:
                     self.speed_history.append(data)
-                    spark = self._generate_sparkline(list(self.speed_history))
                     speed_fmt = f"{data:.2f}" if data < 10 else f"{data:.1f}"
                     self.ui.widgets.lbl_speed.config(text=f"{speed_fmt} ch/s")
-                    self.ui.widgets.lbl_sparkline.config(text=spark)
-                    if self.ui.widgets.web_gui_var.get():
-                        self.shared_state.update_telemetry(tokens_per_sec=data)
             elif type == "segment":
                 if self.ui.widgets.web_gui_var.get():
                     idx, time_val, eng, heb = data
@@ -626,16 +615,6 @@ class TranslatorApp:
         if m: parts.append(f"{m}m")
         parts.append(f"{s:02d}s")
         return " ".join(parts)
-
-    def _generate_sparkline(self, history):
-        if not history: return ""
-        ticks = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█']
-        m_min = min(history)
-        m_max = max(history)
-        m_range = m_max - m_min if m_max != m_min else 1
-        
-        bars = [ticks[int(((val - m_min) / m_range) * (len(ticks) - 1))] for val in history]
-        return "\u200a".join(bars)
 
     def _calculate_estimation(self, history, current_size, current_load=0, min_val=5):
         """

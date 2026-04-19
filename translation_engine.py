@@ -297,11 +297,9 @@ class TranslationEngine:
                 
                 # Update both dashboards immediately
                 self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
-                self.ui_queue.put(("pipeline_telemetry", historical_speed))
                 
                 if self.shared_state:
                     self.shared_state.update_cost(total_main_cost, total_judge_cost)
-                    self.shared_state.update_telemetry(tokens_per_sec=historical_speed)
 
             file_mode = 'a' if resume_mode else 'w'
             with open(output_file, file_mode, encoding='utf-8') as f_out:
@@ -934,6 +932,8 @@ class TranslationEngine:
                             pipeline_duration = time.time() - pipeline_start_time
                             pipeline_velocity = pipeline_load / pipeline_duration if pipeline_duration > 0 else 0
                             self.ui_queue.put(("pipeline_telemetry", pipeline_velocity))
+                            if self.shared_state:
+                                self.shared_state.update_telemetry(tokens_per_sec=pipeline_velocity)
                             # ──────────────────────────────────────────────
 
                             self.ui_queue.put(("batch_success", None))

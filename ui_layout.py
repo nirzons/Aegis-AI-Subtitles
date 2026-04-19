@@ -126,9 +126,6 @@ class MainUILayout:
         self.widgets.lbl_speed = tk.Label(lbl_container, text="--- ch/s", bg="white", font=("Segoe UI", 9), fg="#9b59b6")
         self.widgets.lbl_speed.pack(side=tk.LEFT, padx=5)
 
-        self.widgets.lbl_sparkline = tk.Label(lbl_container, text="", bg="white", font=("Consolas", 10), fg="#8e44ad")
-        self.widgets.lbl_sparkline.pack(side=tk.LEFT, padx=2)
-
         self.widgets.lbl_cost = tk.Label(lbl_container, text="Cost: $0.00", bg="white", font=("Segoe UI", 9, "bold"), fg="#27ae60")
         self.widgets.lbl_cost.pack(side=tk.RIGHT, padx=15)
 
