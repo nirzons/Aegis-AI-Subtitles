@@ -328,6 +328,7 @@ class TranslationEngine:
                     last_judge_error = ""      # הטקסט של השגיאה
                     last_judged_indices = set() # האינדקסים שהיו בתוך ה-Chunk שנפסל
                     previous_overlong_indices = set() # עקביות אחר שורות ארוכות מדי לצורך תיקון אוטומטי
+                    pipeline_start_time = time.time()
                     while not batch_success and not self.should_stop:
                         batch_diagnostics_logged = False
                         this_attempt_auditor_flagged = False  # reset each attempt
@@ -343,9 +344,8 @@ class TranslationEngine:
                         next_context_blocks = []
                         if end_idx <= total_blocks - 2: next_context_blocks = blocks[end_idx : end_idx + 2]
                         elif end_idx == total_blocks - 1: next_context_blocks = [blocks[total_blocks - 1]]
-
+[CHUNK_DELIMITER]
                         chunk = blocks[start_idx:end_idx]
-                        pipeline_start_time = time.time()
                         
                         original_metadata = []
                         for b in chunk:
@@ -866,6 +866,66 @@ class TranslationEngine:
 
                             # ── Batch success tracking ─────────────────────
                             stats["total_batches_succeeded"] += 1
+                            
+                            # Forensic Linguistic Analysis
+                            linc = stats.get("linguistics", {})
+                            for m in original_metadata:
+                                idx = m['index']
+                                eng = m['text']
+                                heb = received_dict.get(idx, "").strip()
+                                
+                                # Character & Word Load (Defensive increment)
+                                linc["source_chars"] = linc.get("source_chars", 0) + len(eng)
+                                linc["source_words"] = linc.get("source_words", 0) + len(eng.split())
+                                
+                                # Punctuation Flux & Musicality
+                                linc["source_punct"] = linc.get("source_punct", 0) + len(re.findall(r'[!.?]', eng))
+                                linc["music_symbols"] = linc.get("music_symbols", 0) + len(re.findall(r'[♪♫#]', eng))
+                                
+                                if not heb:
+                                    linc["empty_subs"] = linc.get("empty_subs", 0) + 1
+                                    if re.search(r"[\[(].*?[\])]", eng):
+                                        linc["sdh_filtered"] = linc.get("sdh_filtered", 0) + 1
+                                else:
+                                    linc["target_chars"] = linc.get("target_chars", 0) + len(heb)
+                                    linc["target_words"] = linc.get("target_words", 0) + len(heb.split())
+                                    linc["target_punct"] = linc.get("target_punct", 0) + len(re.findall(r'[!.?]', heb))
+                                    if "\n" in heb:
+                                        linc["multiline_subs"] = linc.get("multiline_subs", 0) + 1
+                                        
+                                    # Track Extremes (Longest Target)
+                                    h_len = len(heb)
+                                    h_words = len(heb.split())
+                                    
+                                    # Ensure extreme dicts exist
+                                    if "longest_target_chars" not in linc: linc["longest_target_chars"] = {"index": -1, "value": 0}
+                                    if "longest_target_words" not in linc: linc["longest_target_words"] = {"index": -1, "value": 0}
+                                    
+                                    if h_len > linc["longest_target_chars"]["value"]:
+                                        linc["longest_target_chars"] = {"index": idx, "value": h_len}
+                                    if h_words > linc["longest_target_words"]["value"]:
+                                        linc["longest_target_words"] = {"index": idx, "value": h_words}
+
+                                # Track Extremes (Longest Source)
+                                e_len = len(eng)
+                                e_words = len(eng.split())
+                                
+                                # Ensure extreme dicts exist
+                                if "longest_source_chars" not in linc: linc["longest_source_chars"] = {"index": -1, "value": 0}
+                                if "longest_source_words" not in linc: linc["longest_source_words"] = {"index": -1, "value": 0}
+                                
+                                if e_len > linc["longest_source_chars"]["value"]:
+                                    linc["longest_source_chars"] = {"index": idx, "value": e_len}
+                                if e_words > linc["longest_source_words"]["value"]:
+                                    linc["longest_source_words"] = {"index": idx, "value": e_words}
+
+                            # Engine Reasoning & Trust
+                            if this_attempt_auditor_flagged:
+                                # If we reached here, it means batch_success is True. 
+                                # If it was flagged but succeeded, it was a Judge Approval (or a retry pass).
+                                # We count it as 'Sensitivity' metric.
+                                stats["auditor_false_positives"] = stats.get("auditor_false_positives", 0) + 1
+
                             if len(attempted_strides) == 1 and not this_attempt_auditor_flagged:
                                 _inc_by_size(stats["clean_passes_by_size"], current_batch_size)
                             # ──────────────────────────────────────────────

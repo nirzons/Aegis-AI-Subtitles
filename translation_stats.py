@@ -46,6 +46,23 @@ EMPTY_STATS = {
     "llm_call_times_new":            [],
     "llm_call_times_retry":          [],
     "resume_count":                  0,
+    "linguistics": {
+        "source_chars": 0,
+        "target_chars": 0,
+        "source_words": 0,
+        "target_words": 0,
+        "source_punct": 0,
+        "target_punct": 0,
+        "music_symbols": 0,
+        "empty_subs":   0,
+        "multiline_subs": 0,
+        "sdh_filtered":  0,
+        "longest_source_chars": {"index": -1, "value": 0},
+        "longest_source_words": {"index": -1, "value": 0},
+        "longest_target_chars": {"index": -1, "value": 0},
+        "longest_target_words": {"index": -1, "value": 0}
+    },
+    "auditor_false_positives": 0
 }
 
 
@@ -66,11 +83,20 @@ def make_stats(resume_from=None):
             s[k] = type(v)() if isinstance(v, (dict, list)) else v
         return s
 
-    # Resume: backfill any keys that didn't exist in older checkpoints
+    # Resume: backfill any missing keys or nested dict entries
     s = dict(resume_from)
     for k, v in EMPTY_STATS.items():
         if k not in s:
+            # Entirely missing top-level key
             s[k] = type(v)() if isinstance(v, (dict, list)) else v
+            if isinstance(v, dict):
+                s[k].update(v)
+        elif isinstance(v, dict) and isinstance(s[k], dict):
+            # Nested dictionary backfill
+            for sub_k, sub_v in v.items():
+                if sub_k not in s[k]:
+                    s[k][sub_k] = sub_v
+
     s["resume_count"] += 1
     return s
 
@@ -179,7 +205,8 @@ def print_stats(stats, total_blocks, total_main_cost, total_judge_cost,
         "",
         div("⏱️  Time"),
         f"  Total Wall Time:         {fmt_time(total_secs)}",
-        f"  Total Characters:        {total_chars:,} ch",
+        f"  Total Source (English):  {stats['linguistics']['source_chars']:,} chars",
+        f"  Total Target (Hebrew):   {stats['linguistics']['target_chars']:,} chars",
         f"  Global Speed Average:    {global_avg_speed:.1f} ch/s",
         f"  Total Blocks:            {total_blocks}",
         f"  Avg Time / Block:        {avg_block:.1f} sec",
@@ -220,6 +247,26 @@ def print_stats(stats, total_blocks, total_main_cost, total_judge_cost,
         f"  Main Model:  {fmt_cost(total_main_cost)}",
         f"  Judge Model: {fmt_cost(total_judge_cost)}",
         f"  Total:       {fmt_cost(total_cost)}",
+        "",
+        div("📝 LINGUISTIC BALANCE"),
+        f"  Character Ratio:     {(stats['linguistics']['target_chars']/stats['linguistics']['source_chars'] if stats['linguistics']['source_chars'] > 0 else 0):.2f}x",
+        f"  Word Ratio:          {(stats['linguistics']['target_words']/stats['linguistics']['source_words'] if stats['linguistics']['source_words'] > 0 else 0):.2f}x",
+        f"  Words (Eng):         {stats['linguistics']['source_words']:,}",
+        f"  Words (Heb):         {stats['linguistics']['target_words']:,}  (Avg { (stats['linguistics']['target_words']/total_blocks if total_blocks > 0 else 0):.1f} words/sub)",
+        f"  Punctuation Flux:    Eng: {stats['linguistics']['source_punct']:,} / Heb: {stats['linguistics']['target_punct']:,}",
+        "",
+        div("🎵 AESTHETIC & FORENSIC METRICS"),
+        f"  Music Passthrough:   {stats['linguistics']['music_symbols']:,} symbols",
+        f"  Multi-line Subs:     {stats['linguistics']['multiline_subs']:,}  ({(stats['linguistics']['multiline_subs']/total_blocks*100 if total_blocks > 0 else 0):.1f}%)",
+        f"  Empty/Omitted Subs:  {stats['linguistics']['empty_subs']:,}  (SDH filtered: {stats['linguistics']['sdh_filtered']})",
+        f"  Longest Eng (Chars): Idx {stats['linguistics']['longest_source_chars']['index']} ({stats['linguistics']['longest_source_chars']['value']} chars)",
+        f"  Longest Eng (Words): Idx {stats['linguistics']['longest_source_words']['index']} ({stats['linguistics']['longest_source_words']['value']} words)",
+        f"  Longest Heb (Chars): Idx {stats['linguistics']['longest_target_chars']['index']} ({stats['linguistics']['longest_target_chars']['value']} chars)",
+        f"  Longest Heb (Words): Idx {stats['linguistics']['longest_target_words']['index']} ({stats['linguistics']['longest_target_words']['value']} words)",
+        "",
+        div("🤖 ENGINE REASONING & TRUST"),
+        f"  Auditor False Positives: {stats.get('auditor_false_positives', 0)}  (Flagged but Judge Approved)",
+        f"  Trust Score:             {(100 - (stats.get('auditor_false_positives', 0) / stats.get('total_batches_succeeded', 1) * 100)):.1f}%",
         "",
         div("🗂️  Session Parameters"),
         f"  SRT File:           {os.path.basename(srt_file)}",
