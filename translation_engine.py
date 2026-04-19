@@ -356,7 +356,22 @@ class TranslationEngine:
                             if re.fullmatch(r"[-.\s]*[\[(].*?[\])][-.\s]*", txt):
                                 input_payload[idx] = "" 
 
-                        text_chunk_parts.append(f"### [בלוקים לתרגום - JSON] ###\n{json.dumps(input_payload, ensure_ascii=False, indent=2)}\n")
+                        # --- Italic Passthrough: Pre-Processing ---
+                        # We identify subtitles entirely wrapped in <i>...</i>
+                        # We strip them to make the LLM's job easier and prevent \nt artifacts.
+                        batch_italic_indices = set()
+                        final_input_payload = {}
+                        for idx, txt in input_payload.items():
+                            stripped_txt = txt.strip()
+                            # Check if the text starts with <i> and ends with </i> and has NO other tag pairs in between
+                            # A simple check: starts/ends with tags + only one occurrence of the opening tag.
+                            if stripped_txt.startswith('<i>') and stripped_txt.endswith('</i>') and stripped_txt.count('<i>') == 1:
+                                final_input_payload[idx] = stripped_txt[3:-4].strip()
+                                batch_italic_indices.add(idx)
+                            else:
+                                final_input_payload[idx] = txt
+
+                        text_chunk_parts.append(f"### [בלוקים לתרגום - JSON] ###\n{json.dumps(final_input_payload, ensure_ascii=False, indent=2)}\n")
                         
                         if next_context_blocks: 
                             text_chunk_parts.append(f"### [הקשר הבא - לא לתרגום] ###\n{strip_srt(next_context_blocks)}\n")
@@ -570,6 +585,19 @@ class TranslationEngine:
                                 raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json.keys())}")
 
                             received_dict = res_json['translated_srt']
+
+                            # --- Italic Passthrough: Post-Processing ---
+                            # Restore global italics for identified indices
+                            if batch_italic_indices:
+                                restored_count = 0
+                                for idx in batch_italic_indices:
+                                    if idx in received_dict:
+                                        heb_text = str(received_dict[idx]).strip()
+                                        if heb_text and not (heb_text.startswith('<i>') and heb_text.endswith('</i>')):
+                                            received_dict[idx] = f"<i>{heb_text}</i>"
+                                            restored_count += 1
+                                if restored_count > 0:
+                                    log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Restored global italics for indices: {', '.join(sorted(batch_italic_indices))}")
 
                             changes_detected = []
                             repaired_ghost_indices = []
