@@ -78,7 +78,8 @@ function updateUI(state) {
         };
 
         const total = state.telemetry.cost_main + state.telemetry.cost_judge;
-        elements.tokensSecText.textContent = (state.telemetry.tokens_per_sec ?? 0).toFixed(1);
+        const spd = state.telemetry.tokens_per_sec ?? 0;
+        elements.tokensSecText.textContent = spd < 10 ? spd.toFixed(2) : spd.toFixed(1);
         elements.sparklineChart.textContent = generateSparkline(state.telemetry.speed_history);
         elements.cacheBadge.innerHTML = `<i class="fas fa-bolt text-[8px]"></i> Cache ${state.telemetry.cache_hit_percent}%`;
         

@@ -938,7 +938,8 @@ class TranslationEngine:
 
                             self.ui_queue.put(("batch_success", None))
                             
-                            log(self.log_queue, session_log_file, f"✅ Batch {indices[0]}-{indices[-1]} saved successfully. {pipeline_velocity:.1f}ch/s")
+                            speed_fmt = f"{pipeline_velocity:.2f}" if pipeline_velocity < 10 else f"{pipeline_velocity:.1f}"
+                            log(self.log_queue, session_log_file, f"✅ Batch {indices[0]}-{indices[-1]} saved successfully. {speed_fmt}ch/s")
                             last_judge_error = ""
                             last_judged_indices = set()
 

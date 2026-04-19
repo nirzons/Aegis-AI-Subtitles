@@ -480,7 +480,8 @@ class TranslatorApp:
                 if data > 0:
                     self.speed_history.append(data)
                     spark = self._generate_sparkline(list(self.speed_history))
-                    self.ui.widgets.lbl_speed.config(text=f"{data:.1f} ch/s")
+                    speed_fmt = f"{data:.2f}" if data < 10 else f"{data:.1f}"
+                    self.ui.widgets.lbl_speed.config(text=f"{speed_fmt} ch/s")
                     self.ui.widgets.lbl_sparkline.config(text=spark)
                     if self.ui.widgets.web_gui_var.get():
                         self.shared_state.update_telemetry(tokens_per_sec=data)
@@ -633,11 +634,8 @@ class TranslatorApp:
         m_max = max(history)
         m_range = m_max - m_min if m_max != m_min else 1
         
-        res = ""
-        for val in history:
-            idx = int(((val - m_min) / m_range) * (len(ticks) - 1))
-            res += ticks[idx]
-        return res
+        bars = [ticks[int(((val - m_min) / m_range) * (len(ticks) - 1))] for val in history]
+        return "\u200a".join(bars)
 
     def _calculate_estimation(self, history, current_size, current_load=0, min_val=5):
         """
