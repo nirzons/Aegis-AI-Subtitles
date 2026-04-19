@@ -328,8 +328,7 @@ class TranslatorApp:
     def process_queues(self):
         while not self.log_queue.empty():
             text = self.log_queue.get()
-            self.ui.widgets.log_text.insert(tk.END, text + "\n")
-            self.ui.widgets.log_text.see(tk.END)
+            self._log_with_tags(text)
             if self.ui.widgets.web_gui_var.get():
                 self.shared_state.append_log(text)
             
@@ -474,15 +473,21 @@ class TranslatorApp:
 
                 self.ui.widgets.lbl_cost.config(text=format_cost_display(main_cost, judge_cost))
                 
-                # Update Speed Telemetry
+                # Update Live Speed Telemetry (Per-call)
                 if tokens_per_sec > 0:
-                    self.speed_history.append(tokens_per_sec)
-                    spark = self._generate_sparkline(list(self.speed_history))
-                    self.ui.widgets.lbl_speed.config(text=f"{tokens_per_sec:.1f} t/s")
-                    self.ui.widgets.lbl_sparkline.config(text=spark)
+                    self.ui.widgets.lbl_speed.config(text=f"{tokens_per_sec:.1f} ch/s")
 
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_cost(main_cost, judge_cost, display_text=self.ui.widgets.lbl_cost.cget("text"))
+            elif type == "pipeline_telemetry":
+                # data is pipeline_velocity (ch/s for the entire successful batch)
+                if data > 0:
+                    self.speed_history.append(data)
+                    spark = self._generate_sparkline(list(self.speed_history))
+                    self.ui.widgets.lbl_speed.config(text=f"{data:.1f} ch/s")
+                    self.ui.widgets.lbl_sparkline.config(text=spark)
+                    if self.ui.widgets.web_gui_var.get():
+                        self.shared_state.update_telemetry(tokens_per_sec=data)
             elif type == "segment":
                 if self.ui.widgets.web_gui_var.get():
                     idx, time_val, eng, heb = data
@@ -691,6 +696,40 @@ class TranslatorApp:
             if self.ui.widgets.web_gui_var.get():
                 self.shared_state.update_timer(timer_text)
             self._timer_after_id = self.root.after(1000, self._tick_timer)
+    def _log_with_tags(self, text):
+        target = self.ui.widgets.log_text
+        tag = None
+        
+        # Priority mapping from Web Console logic
+        if "✅" in text or "Batch saved successfully" in text:
+            tag = "success"
+        elif "⚠️" in text or "Batch Failure" in text or "❌" in text:
+            tag = "error"
+        elif "🔍" in text or "Auditor Flag" in text or "🧹" in text or "Sanitizer" in text:
+            tag = "warning"
+        elif "💰" in text or "[Main Model]" in text or "⚖️" in text or "[Judge Model]" in text:
+            tag = "info"
+        elif "🔄" in text:
+            tag = "retry"
+        elif "🚀" in text or "SESSION RESUMED" in text:
+            tag = "success" # Emerald
+        elif "⌛" in text:
+            tag = "system"
+            
+        # VIBRANT ICON LOGIC: 
+        # Separate the leading emoji from the rest of the text so it maintains its original multi-color.
+        if text and not text[0].isascii():
+            parts = text.split(" ", 1)
+            icon = parts[0]
+            rest = parts[1] if len(parts) > 1 else ""
+            
+            target.insert(tk.END, icon + " ")  # Neutral (uses colorful system emoji font)
+            target.insert(tk.END, rest + "\n", tag) # Themed (tints the text only)
+        else:
+            target.insert(tk.END, text + "\n", tag)
+            
+        target.see(tk.END)
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = TranslatorApp(root)

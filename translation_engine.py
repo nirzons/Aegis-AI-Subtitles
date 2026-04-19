@@ -286,9 +286,20 @@ class TranslationEngine:
 
             self.ui_queue.put(("progress", (processed, total_blocks)))
 
-            # Pre-seed web dashboard with checkpoint costs on resume (mirrors Tkinter cost label behaviour)
-            if resume_mode and self.shared_state:
-                self.shared_state.update_cost(total_main_cost, total_judge_cost)
+            # Pre-seed web dashboard with checkpoint costs and historical speed on resume
+            if resume_mode:
+                historical_speed = 0.0
+                all_calls = stats.get("llm_call_times_new", []) + stats.get("llm_call_times_retry", [])
+                total_duration = sum(c[0] for c in all_calls)
+                total_load = sum(c[1] for c in all_calls)
+                if total_duration > 0:
+                    historical_speed = total_load / total_duration
+                
+                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost, historical_speed)))
+                
+                if self.shared_state:
+                    self.shared_state.update_cost(total_main_cost, total_judge_cost)
+                    self.shared_state.update_telemetry(tokens_per_sec=historical_speed)
 
             file_mode = 'a' if resume_mode else 'w'
             with open(output_file, file_mode, encoding='utf-8') as f_out:
@@ -332,6 +343,7 @@ class TranslationEngine:
                         elif end_idx == total_blocks - 1: next_context_blocks = [blocks[total_blocks - 1]]
 
                         chunk = blocks[start_idx:end_idx]
+                        pipeline_start_time = time.time()
                         
                         original_metadata = []
                         for b in chunk:
@@ -351,6 +363,7 @@ class TranslationEngine:
                             text_chunk_parts.append(f"### [הקשר קודם - לא לתרגום] ###\n{strip_srt(prev_context_blocks)}\n")
                         
                         input_payload = { m['index']: m['text'] for m in original_metadata }
+                        pipeline_load = sum(len(str(v)) for v in input_payload.values())
                         for idx, txt in input_payload.items():
                             # If line is only SDH tags + punctuation, force empty string
                             if re.fullmatch(r"[-.\s]*[\[(].*?[\])][-.\s]*", txt):
@@ -526,8 +539,8 @@ class TranslationEngine:
 
                             # V3 Telemetry Hook: Speed and Cache
                             if self.shared_state:
-                                tokens_per_sec = (in_tokens + out_tokens) / _call_duration if _call_duration > 0 else 0
-                                self.shared_state.update_telemetry(cache_hit_percent=int(hit_pct), tokens_per_sec=tokens_per_sec)                                
+                                chars_per_sec = batch_load / _call_duration if _call_duration > 0 else 0
+                                self.shared_state.update_telemetry(cache_hit_percent=int(hit_pct), tokens_per_sec=chars_per_sec)                                
                             
                             brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
                             brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({brain_load:.1f}%)" if reasoning_tokens > 0 else ""
@@ -535,7 +548,7 @@ class TranslationEngine:
                             total_main_cost += batch_cost
                             
                             # Immediate GUI update
-                            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost, tokens_per_sec)))
+                            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                             
                             # Immediate Terminal logging
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
@@ -735,6 +748,7 @@ class TranslationEngine:
                                 judge_api_key = config["judge_api_key"]
                                 judge_batch_size = config["judge_batch_size"]
                                 
+                                j_start = time.time()
                                 is_valid, judge_reason, j_in, j_out, j_cached, j_reasoning = call_llm_judge(
                                     judge_cfg, indices, input_payload, received_dict, judge_api_key,
                                     judge_batch_size=judge_batch_size,
@@ -771,7 +785,7 @@ class TranslationEngine:
                                 total_judge_cost += j_cost
                                 
                                 # Immediate GUI update
-                                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost, 0)))
+                                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                                 
                                 # Immediate Terminal logging
                                 log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}{j_brain_str}) | Total Judge: {fmt_val(total_judge_cost)}")
@@ -852,6 +866,12 @@ class TranslationEngine:
                             stats["total_batches_succeeded"] += 1
                             if len(attempted_strides) == 1 and not this_attempt_auditor_flagged:
                                 _inc_by_size(stats["clean_passes_by_size"], current_batch_size)
+                            # ──────────────────────────────────────────────
+
+                            # ── Pipeline Velocity Telemetry ───────────────
+                            pipeline_duration = time.time() - pipeline_start_time
+                            pipeline_velocity = pipeline_load / pipeline_duration if pipeline_duration > 0 else 0
+                            self.ui_queue.put(("pipeline_telemetry", pipeline_velocity))
                             # ──────────────────────────────────────────────
 
                             self.ui_queue.put(("batch_success", None))

@@ -123,7 +123,7 @@ class MainUILayout:
         self.widgets.lbl_eta = tk.Label(lbl_container, text="ETA: --:--", bg="white", font=("Segoe UI", 9))
         self.widgets.lbl_eta.pack(side=tk.LEFT, padx=15)
 
-        self.widgets.lbl_speed = tk.Label(lbl_container, text="", bg="white", font=("Segoe UI", 9), fg="#9b59b6")
+        self.widgets.lbl_speed = tk.Label(lbl_container, text="--- ch/s", bg="white", font=("Segoe UI", 9), fg="#9b59b6")
         self.widgets.lbl_speed.pack(side=tk.LEFT, padx=5)
 
         self.widgets.lbl_sparkline = tk.Label(lbl_container, text="", bg="white", font=("Consolas", 10), fg="#8e44ad")
@@ -149,3 +149,11 @@ class MainUILayout:
 
         self.widgets.log_text = scrolledtext.ScrolledText(term_frame, wrap=tk.WORD, font=("Consolas", 10), bg="#1e272e", fg="#d1d8e0", insertbackground="white")
         self.widgets.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Syntax Highlighting Tags (Matches web dashboard palette)
+        self.widgets.log_text.tag_config("success", foreground="#2ecc71") # Emerald
+        self.widgets.log_text.tag_config("error",   foreground="#e74c3c") # Rose
+        self.widgets.log_text.tag_config("warning", foreground="#f1c40f") # Amber
+        self.widgets.log_text.tag_config("info",    foreground="#3498db") # Sky
+        self.widgets.log_text.tag_config("retry",   foreground="#348ade") # Blue
+        self.widgets.log_text.tag_config("system",  foreground="#95a5a6") # Gray
