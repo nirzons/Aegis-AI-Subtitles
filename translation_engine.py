@@ -344,7 +344,7 @@ class TranslationEngine:
                         next_context_blocks = []
                         if end_idx <= total_blocks - 2: next_context_blocks = blocks[end_idx : end_idx + 2]
                         elif end_idx == total_blocks - 1: next_context_blocks = [blocks[total_blocks - 1]]
-[CHUNK_DELIMITER]
+
                         chunk = blocks[start_idx:end_idx]
                         
                         original_metadata = []
