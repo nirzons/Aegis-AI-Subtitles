@@ -14,9 +14,9 @@ With the built-in **Live Viewer**, you can audit the translation process in real
 
 ## 🚀 Key Features
 
-- **🧠 Context-Aware Translation**: Processes subtitles in overlapping batches to maintain narrative continuity and tonal consistency.
+- **🧠 Context-Aware Translation**: Processes subtitles in overlapping batches using a **Sandwich Architecture** (Thought -> Summary -> Work -> Metadata) to maximize model focus and narrative continuity.
 - **⚖️ AI Judge System**: A dedicated "Judge" model semantically verifies suspicious translations, detecting hallucinations, omissions, and cultural nuances.
-- **🛡️ Forensic Auditor**: A high-speed heuristic scanner that enforces strict SDH removal, RTL formatting, and dynamic speaker name deletion via `.sysprm` config.
+- **🛡️ Forensic Auditor**: A high-speed heuristic scanner that enforces strict SDH removal, RTL formatting, and dynamic speaker name deletion. It now features **Hyper-Specific Error Reporting**, extracting and naming exact offending words (e.g., `"stuck"`, `"Z"`) to help the LLM correct hallucinations during retries.
 - **🩹 Self-Healing & Resilience**: Path-breaking schema inference that recovers translations from hallucinated JSON keys—optimized specifically for high-reasoning models like GPT-5/o1.
 - **💰 Cost-Optimized**: Native support for prompt caching (GPT-5, DeepSeek 90% discount) with real-time token tracking and hit-ratio logs.
 - **🔄 Hot Resume**: Seamlessly stop, tune parameters (batch sizes, models), and resume without losing session history.
@@ -34,7 +34,9 @@ With the built-in **Live Viewer**, you can audit the translation process in real
   - **🎬 Live Intercept Feed**: Paginated English ↔ Hebrew grid with auto-scroll and 50-segment resume history.
   - **📱 Responsive Mobile View**: Compact stacked layout optimised for phone screens without losing any telemetry.
 - **📋 Clipboard Integration**: Instantly copy terminal output logs with a single button click in the main dashboard.
-- **🖥️ Local Model Support**: "Local" mode optimization for LM Studio and local LLMs, hiding internal magic cost values for a cleaner interface.
+- **🖥️ Local Model Support**: Optimized for LM Studio and local LLMs via **API-level Strict Mode** (JSON Schema enforcement). The engine automatically synchronizes and deduplicates the `required` keys in the schema, ensuring 100% structural stability and preventing `400 Bad Request` errors even on smaller hardware.
+  > [!IMPORTANT]
+  > **LM Studio Users**: You must enable the **"Structured Output"** toggle in LM Studio's Inference settings for the system's Strict Mode to function correctly.
 
 ---
 
@@ -82,7 +84,7 @@ To access the dashboard:
 1. Clone the repository.
 2. **Setup Directories**:
    - `English subtitles/`: Place your source `.srt` files here.
-   - `sysprm files/`: Place your project instructions here (e.g., `survivor_45_hebrew.sysprm`).
+   - `sysprm files/`: Place your project instructions here (e.g., `survivor_45_hebrew.sysprm`). Aegis now supports a **Strict Zero-English Policy** for local models; see the provided templates for Section 7 examples.
 3. **Run Application**:
    ```bash
    python translator_ai.pyw
@@ -97,7 +99,7 @@ To access the dashboard:
 Aegis doesn't translate in a vacuum. It maintains a rolling history of the "Story So Far," including character bios, current setting, and immediate preceding dialogue to prevent gender-flips and continuity errors. Furthermore, it employs a **Dynamic Prompt Architecture** that automatically synchronizes project-specific custom `.sysprm` dictionaries with global rules, creating a seamlessly numbered instruction set that maximizes LLM adherence.
 
 ### 2. The Heuristic Shield
-A deterministic auditor that runs before any AI check. It instantly catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long for subtitle screens, triggering an immediate retry before wasting tokens on an AI Judge.
+A deterministic auditor that runs before any AI check. It instantly catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long for subtitle screens. During retries, it injects the **exact offending word** into the feedback loop, effectively "shaming" the model into compliance and overcoming stubborn cultural slang (like "Gen Z" hallucinations).
 
 ### 3. Reasoner Optimization
 Specialized handling for "Reasoning" models (GPT-5/o1). Aegis utilizes the `developer` role to isolate instructions from content, ensuring **90%+ cache hit ratios** and preventing "Schema Collapse" even when the model goes off-script.

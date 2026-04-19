@@ -4,9 +4,15 @@ import datetime
 import json
 import re
 import threading
-from constants import GLOBAL_SYSTEM_INSTRUCTIONS, GLOBAL_TECHNICAL_RULES, JSON_SCHEMA_TEMPLATE
-from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch
-from llm_api import call_llm, call_llm_judge
+from constants import (
+    STEP_HEADER, STEP_READ_CONTEXT, STEP_CONTINUOUS_DRAFT, STEP_MAPPING_PLAN, 
+    STEP_SRT_SPLIT_RULES, STEP_FINAL_SRT, STEP_SELF_AUDIT, 
+    STEP_CONTEXT_PRIMING, STEP_METADATA_UPDATE,
+    GLOBAL_TECHNICAL_RULES, JSON_SCHEMA_TEMPLATE, JSON_SCHEMA_LITE, RULE_NO_ENGLISH
+)
+
+from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch, force_split_overlong_line
+from llm_api import call_llm, call_llm_judge, generate_batch_schema
 from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text, load_srt_full_history
 
 from translation_stats import _inc_by_size, make_stats, print_stats
@@ -89,6 +95,11 @@ class TranslationEngine:
                 total_judge_cost = 0.0
                 log(self.log_queue, session_log_file, f"\n📁 Creating new Checkpoint File: {current_checkpoint_file}")
 
+            # Initial terminal info
+            log(self.log_queue, session_log_file, f"📝 Target File: {os.path.basename(srt_file)}")
+            if resume_mode:
+                log(self.log_queue, session_log_file, f"🔄 Resuming from index: {current_index}")
+
             with open(sys_file, 'r', encoding='utf-8-sig') as f:
                 lines = f.readlines()
             clean_lines = [line for line in lines if not line.strip().startswith("//")]
@@ -130,8 +141,35 @@ class TranslationEngine:
             idx_tech = idx_workflow + 1
             idx_clean = idx_tech + 1
             
-            sys_inst = GLOBAL_SYSTEM_INSTRUCTIONS.replace("[IDX_WORKFLOW]", str(idx_workflow))
+            # Modular System Instruction Assembly
+            use_scratchpad = model_cfg.get("enable_scratchpad", True)
+            
+            workflow_steps = [STEP_READ_CONTEXT, STEP_CONTEXT_PRIMING]
+            
+            if use_scratchpad:
+                # Quality Mode: Add full reasoning stack
+                workflow_steps.append(STEP_CONTINUOUS_DRAFT)
+                workflow_steps.append(STEP_MAPPING_PLAN)
+                
+            workflow_steps.append(STEP_SRT_SPLIT_RULES)
+            workflow_steps.append(STEP_FINAL_SRT)
+            # Metadata bookkeeping happens after the core work
+            workflow_steps.append(STEP_METADATA_UPDATE)
+            workflow_steps.append(STEP_SELF_AUDIT)
+            
+            # Format internal steps with correct numbers (שלב 1, 2, ...)
+            formatted_steps = []
+            for i, step_text in enumerate(workflow_steps, 1):
+                formatted_steps.append(step_text.replace("{n}", str(i)))
+                
+            sys_inst_header = STEP_HEADER.replace("[IDX_WORKFLOW]", str(idx_workflow))
+            sys_inst = sys_inst_header + "\n" + "\n".join(formatted_steps)
+            
             tech_rules = GLOBAL_TECHNICAL_RULES.replace("[IDX_TECH]", str(idx_tech)).replace("[IDX_CLEAN]", str(idx_clean))
+            
+            # Inject specific rule for Efficiency Mode (No Scratchpad)
+            if not use_scratchpad:
+                tech_rules += f"\n\n{RULE_NO_ENGLISH}"
 
             system_prompt_parts = []
             if prompt_prefix:
@@ -142,6 +180,10 @@ class TranslationEngine:
             system_prompt_parts.append(tech_rules.strip())
             
             system_prompt = "\n\n".join(system_prompt_parts) + "\n"
+            
+            # Efficiency/Quality logging
+            log(self.log_queue, session_log_file, f"🚀 [Mode: {'High-Quality (Scratchpad)' if use_scratchpad else 'Efficiency (Direct)'}] Starting translation with {model_cfg['name']}...")
+
                 
             if not resume_mode:
                 try:
@@ -272,6 +314,7 @@ class TranslationEngine:
 
                     last_judge_error = ""      # הטקסט של השגיאה
                     last_judged_indices = set() # האינדקסים שהיו בתוך ה-Chunk שנפסל
+                    previous_overlong_indices = set() # עקביות אחר שורות ארוכות מדי לצורך תיקון אוטומטי
                     while not batch_success and not self.should_stop:
                         batch_diagnostics_logged = False
                         this_attempt_auditor_flagged = False  # reset each attempt
@@ -342,6 +385,25 @@ class TranslationEngine:
                             
                         context_section = '\n'.join(context_section_lines)
 
+                        # Structured Outputs check for prompt optimization
+                        supports_structured = (model_cfg.get('provider') in ['openai', 'lmstudio'] and 
+                                             (model_cfg.get('provider') == 'lmstudio' or any(m in model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])))
+
+                        # Use Lite Schema for Efficiency Mode if Structured Output isn't being used 
+                        # (even if it is, this ensures parity in the prompt instructions)
+                        active_schema_template = JSON_SCHEMA_LITE if not use_scratchpad else JSON_SCHEMA_TEMPLATE
+                        schema_instruction = f"\n{active_schema_template}\n" if not supports_structured else "\n### חובה: השב בפורמט ה-JSON Schema המוגדר בלבד. ###\n"
+
+
+
+                        
+                        # Dynamic Rule Injection: Formatting Tags
+                        # Only show the tag preservation rule if tags or music symbols are actually present in this batch.
+                        has_tags = any("<" in str(val) or "♪" in str(val) for val in input_payload.values())
+                        tag_rule = ""
+                        if has_tags:
+                            tag_rule = "4. תגיות עיצוב (Formatting Tags): שמור על תגיות כמו <i> או <font color=\"...\"> בדיוק במיקומן המקורי. אל תתרגם מילים טכניות (כמו 'color') ואל תמחק אותן. **חשוב: מותר (ואף חובה) להוסיף ירידת שורה `\\n` בתוך תגיות (למשל `<i>טקסט...\\n...טקסט</i>`) כדי לשמור על חוק 8 המילים לשורה.** וודא שערכי צבע מוקפים במירכאות.\n"
+
                         user_prompt = f"""
 אתה מתרגם עכשיו את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.
 
@@ -352,10 +414,12 @@ class TranslationEngine:
 ### חוקים טכניים חובה ###
 1. ספירה מדויקת: **חובה עליך להחזיר בדיוק {expected_count} מפתחות באובייקט 'translated_srt'.**
 2. אינדקסים מדויקים: השתמש בדיוק באינדקסים הבאים כמפתחות: {', '.join(indices)}.
-3. **אל תתרגם ואל תכלול בפלט** אף מילה המופיעה בבלוקי ה"הקשר" (הן בשדה ה-draft והן בתרגום הסופי).
-
-{JSON_SCHEMA_TEMPLATE}
+3. **אל תתרגם ואל תכלול בפלט** אף מילה המופיעה בבלוקי ה"הקשר" (בכל שדה שהוא).
+{tag_rule}
+{schema_instruction}
 """
+
+
                         feedback_injection = ""
                         # אם יש שגיאה מהשופט, ויש לפחות אינדקס אחד משותף בין הבאץ' הנוכחי לבאץ' שנפסל
                         if last_judge_error and set(indices).intersection(last_judged_indices):
@@ -399,14 +463,23 @@ class TranslationEngine:
                             batch_call_start = time.time()
                             # ──────────────────────────────────────────────
 
-                            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key)
+                            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key, indices_list=indices)
 
                             if getattr(self, 'debug_mode', False) and raw_res:
                                 timestamp_str = datetime.datetime.now().strftime("%H:%M:%S")
                                 file_log(session_log_file, f"\n[{timestamp_str}] --- DEBUG TRANSACTION ---")
                                 file_log(session_log_file, f"SYSTEM PROMPT:\n{system_prompt.strip()}\n")
                                 file_log(session_log_file, f"USER PROMPT:\n{final_prompt.strip()}\n")
+                                
+                                # Log Structured Output Schema if batch indices are present
+                                if indices:
+                                    # Use the same logic as the real call to ensure the log is accurate
+                                    schema_dump = json.dumps(generate_batch_schema(indices, use_scratchpad=use_scratchpad), ensure_ascii=False, indent=2)
+                                    file_log(session_log_file, f"STRUCTURED OUTPUT SCHEMA:\n{schema_dump}\n")
+
+                                    
                                 file_log(session_log_file, f"RAW LLM RESPONSE:\n{raw_res.strip()}\n{'-'*38}\n")
+
                                 batch_diagnostics_logged = True
 
                             # ── Record LLM call duration ───────────────────
@@ -499,20 +572,30 @@ class TranslationEngine:
                             received_dict = res_json['translated_srt']
 
                             changes_detected = []
+                            repaired_ghost_indices = []
                             for idx in received_dict:
                                 original_val = str(received_dict[idx])
-                                # 1. מבצעים את התיקון ושומרים למשתנה זמני
+                                
+                                # 1. Standard newline cleanup
                                 cleaned_val = re.sub(r'\s*\\+[nננ]\s*', '\n', original_val)
+                                
+                                # 2. NEW: Ghost Character Sanitizer (e.g., \nt, \ns echoing original English)
+                                # This removes 1-2 english letters immediately after a newline if followed by Hebrew or whitespace
+                                ghost_pattern = r'\n[a-zA-Z]{1,2}(?=\s|[א-ת]|<|♪)'
+                                if re.search(ghost_pattern, cleaned_val):
+                                    cleaned_val = re.sub(ghost_pattern, '\n', cleaned_val)
+                                    repaired_ghost_indices.append(idx)
                             
-                                # 2. בודקים אם היה שינוי
+                                # Check if changed
                                 if cleaned_val != original_val:
                                     changes_detected.append(idx)
-                                    # 3. מעדכנים את המילון בערך הנקי
                                     received_dict[idx] = cleaned_val
 
-                            # הדפסת לוג רק אם היו תיקונים
+                            # Logging repairs
                             if changes_detected:
-                                log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Fixed escaped line breaks in indices: {', '.join(changes_detected)}")
+                                if repaired_ghost_indices:
+                                    log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Removed English ghost fragments in indices: {', '.join(repaired_ghost_indices)}")
+                                log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Fixed escaped line breaks or formatting in indices: {', '.join(changes_detected)}")
                                 stats["sanitizer_fixes"] += 1
 
                             for idx in indices:
@@ -524,6 +607,13 @@ class TranslationEngine:
                             illegal_labels = context_state.get("illegal_labels", [])
                             is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels)
                             
+                            # Forced Escalation for Repairs
+                            if changes_detected:
+                                is_suspicious = True
+                                repair_note = f"IDX:{','.join(repaired_ghost_indices)}|בוצע תיקון אוטומטי להסרת שאריות אנגלית (Ghost fragments). וודא היטב שהמשפט תקין וזורם." if repaired_ghost_indices else "בוצע תיקון אוטומטי לפורמט השורות (n\\)."
+                                heb_audit_reason = f"{repair_note}; {heb_audit_reason}" if heb_audit_reason else repair_note
+                                audit_reason = f"Repaired by Sanitizer; {audit_reason}" if audit_reason else "Repaired by Sanitizer"
+
                             if is_suspicious:
                                 this_attempt_auditor_flagged = True  # mark for clean-pass tracking
 
@@ -553,14 +643,56 @@ class TranslationEngine:
                                     
                                     # Cleanup extra spaces
                                     parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
-                                    last_judge_error = parsed_audit_map
-                                    last_judged_indices = set(indices)
-                                    _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
-                                    log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
-                                    # V3 Audit Hook: Auditor Rejection Ruling
-                                    if self.shared_state:
-                                        self.shared_state.update_audit(last_decision="Auditor: Failed & Retry", batch_trend=-1)
-                                    raise ValueError(f"Heuristic Rejection (skip judge): {audit_reason}")
+                                    
+                                    # === NEW: Stubbornness Fallback (Auto-Correction) ===
+                                    # אם אנחנו בבאץ' מינימלי (2) והאודיטור מזהה שוב את אותה בעיית אורך מילים, נתקן אוטומטית.
+                                    fixed_any = False
+                                    if current_batch_size == 2:
+                                        overlong_in_this_attempt = {idx for idx, msg in parsed_audit_map.items() if "9 מילים" in msg}
+                                        
+                                        # אם האינדקס כבר הופיע כ"ארוך מדי" בניסיון הקודם של הבאץ' הזה
+                                        indices_to_fix = overlong_in_this_attempt.intersection(previous_overlong_indices)
+                                        
+                                        if indices_to_fix:
+                                            for idx_to_fix in indices_to_fix:
+                                                # וודא שזו השגיאה היחידה לאינדקס הזה (כדי לא לפספס הזיות או אנגלית)
+                                                if parsed_audit_map[idx_to_fix].strip() == "נמצאה שורה ארוכה מדי (מעל 9 מילים).":
+                                                    old_text = received_dict[idx_to_fix]
+                                                    new_text = force_split_overlong_line(old_text)
+                                                    if new_text != old_text:
+                                                        received_dict[idx_to_fix] = new_text
+                                                        fixed_any = True
+                                                        log(self.log_queue, session_log_file, f"💡 Stubborn model detected. Applying programmatic split for index {idx_to_fix}.")
+                                        
+                                        # עדכון הזיכרון לניסיון הבא (אם יהיה)
+                                        previous_overlong_indices = overlong_in_this_attempt
+
+                                    if fixed_any:
+                                        # הרצה חוזרת של האודיטור כדי לראות אם התיקון הספיק
+                                        is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels)
+                                        if not is_suspicious:
+                                            # התיקון האוטומטי עבר! נמשיך כאילו הכל תקין.
+                                            log(self.log_queue, session_log_file, f"✅ Programmatic split resolved the issue. Proceeding...")
+                                            # We don't raise ValueError, so the loop continues to 'batch_success = True' eventually
+                                        elif not skip_judge:
+                                            # התיקון עזר חלקית אבל עדיין צריך שופט
+                                            pass 
+                                        else:
+                                            # עדיין דורש ריטריי (אולי בעיה אחרת צצה)
+                                            last_judge_error = parsed_audit_map
+                                            last_judged_indices = set(indices)
+                                            _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
+                                            log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
+                                            raise ValueError(f"Heuristic Rejection (post-fix): {audit_reason}")
+                                    else:
+                                        last_judge_error = parsed_audit_map
+                                        last_judged_indices = set(indices)
+                                        _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
+                                        log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
+                                        # V3 Audit Hook: Auditor Rejection Ruling
+                                        if self.shared_state:
+                                            self.shared_state.update_audit(last_decision="Auditor: Failed & Retry", batch_trend=-1)
+                                        raise ValueError(f"Heuristic Rejection (skip judge): {audit_reason}")
 
                                 _inc_by_size(stats["auditor_sent_to_judge"], current_batch_size)
                                 log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Calling Judge...")
@@ -582,7 +714,8 @@ class TranslationEngine:
                                     log_func=lambda m: log(self.log_queue, session_log_file, m),
                                     file_log_func=lambda m: file_log(session_log_file, m),
                                     audit_reason_heb=heb_audit_reason,
-                                    progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t)))
+                                    progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t))),
+                                    ui_queue=self.ui_queue
                                 )
                                 self.ui_queue.put(("judge_stop", None))
 
@@ -673,7 +806,10 @@ class TranslationEngine:
                             for m in original_metadata:
                                 translated_heb_by_index[m['index']] = fix_rtl(received_dict[m['index']])
                             
-                            context_state = res_json.get('context_state', context_state)
+                            # Harvest flattened context state from response root
+                            context_state['summary'] = res_json.get('summary', context_state.get('summary'))
+                            context_state['last_speaker_info'] = res_json.get('last_speaker_info', context_state.get('last_speaker_info'))
+                            context_state['continuity_note'] = res_json.get('continuity_note', context_state.get('continuity_note'))
                             if indices:
                                 last_idx = indices[-1]
                                 context_state['last_two_lines_heb'] = [received_dict[last_idx]]
@@ -762,9 +898,8 @@ class TranslationEngine:
                         
                         # Check for Climb-Up Trigger
                         if success_streak >= 3 and effective_batch_size < batch_size:
-                            # Calculate half-distance climb (min 5 units to ensure progress)
-                            #climb_amount = max(5, (batch_size - effective_batch_size) // 2)
-                            climb_amount = 8
+                            # Dynamic climb: proportional to target but capped to prevent extreme jumps
+                            climb_amount = max(2, min(8, batch_size // 4))
                             effective_batch_size = min(batch_size, effective_batch_size + climb_amount)
                             stats["batch_grow_events"] += 1
                             log(self.log_queue, session_log_file, f"📈 Success streak {success_streak}: Climbing up → {effective_batch_size}")

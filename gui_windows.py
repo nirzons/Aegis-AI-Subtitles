@@ -214,7 +214,7 @@ class SettingsWindow:
         frame_list = ttk.Frame(self.models_frame)
         frame_list.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        self.tree = ttk.Treeview(frame_list, columns=("ID", "Name", "Provider", "Batch", "In", "Out", "Cache"), show="headings", height=8)
+        self.tree = ttk.Treeview(frame_list, columns=("ID", "Name", "Provider", "Batch", "In", "Out", "Cache", "Scratch"), show="headings", height=8)
         self.tree.heading("ID", text="ID")
         self.tree.heading("Name", text="Model Name")
         self.tree.heading("Provider", text="Provider")
@@ -222,14 +222,17 @@ class SettingsWindow:
         self.tree.heading("In", text="In $")
         self.tree.heading("Out", text="Out $")
         self.tree.heading("Cache", text="Cache %")
+        self.tree.heading("Scratch", text="Scratch")
         
         self.tree.column("ID", width=30, anchor=tk.CENTER)
-        self.tree.column("Name", width=140)
+        self.tree.column("Name", width=120)
         self.tree.column("Provider", width=90)
         self.tree.column("Batch", width=50, anchor=tk.CENTER)
         self.tree.column("In", width=60, anchor=tk.CENTER)
         self.tree.column("Out", width=60, anchor=tk.CENTER)
         self.tree.column("Cache", width=60, anchor=tk.CENTER)
+        self.tree.column("Scratch", width=60, anchor=tk.CENTER)
+
         
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.on_model_select)
@@ -252,8 +255,10 @@ class SettingsWindow:
             "input_price": tk.StringVar(),
             "output_price": tk.StringVar(),
             "cache_discount": tk.StringVar(),
-            "is_local": tk.BooleanVar()
+            "is_local": tk.BooleanVar(),
+            "enable_scratchpad": tk.BooleanVar(value=True)
         }
+
         
         ttk.Label(form_frame, text="ID:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         ttk.Entry(form_frame, textvariable=self.edit_vars["id"], width=10).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
@@ -267,6 +272,8 @@ class SettingsWindow:
         
         ttk.Label(form_frame, text="Temp:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         ttk.Entry(form_frame, textvariable=self.edit_vars["temperature"], width=10).grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Checkbutton(form_frame, text="Use Scratchpad (Quality Draft/Mapping)", variable=self.edit_vars["enable_scratchpad"]).grid(row=2, column=2, columnspan=2, sticky=tk.W, padx=5, pady=2)
+
 
         ttk.Label(form_frame, text="In/Out/Cache%:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         price_frame = ttk.Frame(form_frame)
@@ -287,10 +294,13 @@ class SettingsWindow:
         for k, v in SETTINGS.config["models"].items():
             out_p = v.get("output_price", 0)
             if out_p == 1000000.0: out_p = 0.0
+            scratch_status = "YES" if v.get("enable_scratchpad", True) else "NO"
             self.tree.insert("", tk.END, iid=k, values=(
                 k, v.get("name",""), v.get("provider",""), v.get("batch_size",""), 
-                v.get("input_price", 0), out_p, f"{int(v.get('cache_discount', 0))}%"
+                v.get("input_price", 0), out_p, f"{int(v.get('cache_discount', 0))}%",
+                scratch_status
             ))
+
             
     def on_model_select(self, event):
         selected = self.tree.selection()
@@ -313,6 +323,8 @@ class SettingsWindow:
             self.edit_vars["is_local"].set(False)
 
         self.edit_vars["cache_discount"].set(str(cfg.get("cache_discount", "0.0")))
+        self.edit_vars["enable_scratchpad"].set(cfg.get("enable_scratchpad", True))
+
         
     def new_model(self):
         existing_ids = [int(k) for k in SETTINGS.config["models"].keys() if k.isdigit()]
@@ -326,6 +338,8 @@ class SettingsWindow:
         self.edit_vars["output_price"].set("0.0")
         self.edit_vars["cache_discount"].set("0.0")
         self.edit_vars["is_local"].set(False)
+        self.edit_vars["enable_scratchpad"].set(True)
+
         
     def delete_model(self):
         selected = self.tree.selection()
@@ -364,8 +378,10 @@ class SettingsWindow:
             "temperature": temp,
             "input_price": iprice,
             "output_price": oprice,
-            "cache_discount": cdiscount
+            "cache_discount": cdiscount,
+            "enable_scratchpad": self.edit_vars["enable_scratchpad"].get()
         }
+
         SETTINGS.save_settings()
         messagebox.showinfo("Saved", "Model saved successfully!", parent=self.top)
         self.refresh_model_list()

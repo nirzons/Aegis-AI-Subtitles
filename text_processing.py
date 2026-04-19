@@ -2,8 +2,6 @@ import re
 import difflib
 
 
-import re
-
 def fix_rtl(text):
     if not text: return text
     
@@ -100,28 +98,59 @@ def strip_music_glyphs_batch(heb_dict):
                 heb_dict[k] = cleaned
 
 def pre_repair_json(raw_res):
-    """נסיון לתיקון שגיאות JSON נפוצות של LLMs באופן מקומי לפני ה-Parsing."""
+    """
+    נסיון לתיקון שגיאות JSON נפוצות של LLMs באופן מקומי לפני ה-Parsing.
+    מטפל ב: בלוקי קוד, פסיקים מיותרים, מפתחות שבורים (ללא נקודתיים), ו-JSON קטוע.
+    """
     if not raw_res: return ""
     cleaned = raw_res.strip()
     
-    # הסרת בלוקי קוד ```json ... ```
+    # 1. הסרת בלוקי קוד ```json ... ```
     if "```json" in cleaned:
         cleaned = cleaned.split("```json")[1].split("```")[0].strip()
     elif "```" in cleaned:
         cleaned = cleaned.split("```")[1].split("```")[0].strip()
         
-    # תיקון פסיק מיותר בסוף מערך או אובייקט (Trailing Comma)
+    # 2. תיקון פסיק מיותר בסוף מערך או אובייקט (Trailing Comma)
     cleaned = re.sub(r',\s*\}', '}', cleaned)
     cleaned = re.sub(r',\s*\]', ']', cleaned)
     
-    # בריחת מילוט שגויה בעברית: נהפוך את הבק-סלאש לליטרלי כדי שה-JSON Parser לא יקרוס.
-    # זה מאפשר ללולאת התיקון ב-translation_engine.py (אחרי ה-loads) לזהות, לתקן ולתעד את השגיאה!
+    # 3. תיקון מפתחות שבורים (Missing Colons/Values)
+    # מחפש מפתח (מחרוזת) שאחריו מגיע פסיק או סוגר, ללא נקודתיים לפניו.
+    # Pattern: (Start of object or comma) + whitespace + "key" + whitespace + (?= comma or end-brace)
+    # This specifically fixes: "key", -> "key": null,
+    pattern_missing_colon = r'([{,])\s*"([^"\\:]+)"\s*(?=[,}\]])'
+    cleaned = re.sub(pattern_missing_colon, r'\1 "\2": null', cleaned)
+    
+    # 4. טיפול ב-JSON קטוע (Truncated JSON)
+    # אם ה-LLM עצר באמצע, ננסה לסגור את הסוגריים כדי שיהיה ניתן לפענח לפחות חלק מהמידע.
+    open_braces = cleaned.count('{') - cleaned.count('}')
+    open_brackets = cleaned.count('[') - cleaned.count(']')
+    
+    if open_braces > 0 or open_brackets > 0:
+        # אם הקטיעה קרתה באמצע מפתח או ערך (נגמר בגרשיים או פסיק)
+        if cleaned.endswith(','):
+            cleaned = cleaned.rstrip(',')
+        elif cleaned.endswith('"'):
+            # אם נגמר בגרשיים, נבדוק אם זה מפתח שבור בסוף ה-JSON הקטוע
+            # אם לפני הגרשיים האלה (והגרשיים הפותחות שלהן) יש רצף שנראה כמו התחלה של אובייקט או פסיק
+            # ננסה להוסיף : null
+            if re.search(r'([{,])\s*"[^"\\:]+"$', cleaned):
+                cleaned += ': null'
+        
+        # סגירת סוגריים בסדר הפוך
+        cleaned += ']' * max(0, open_brackets)
+        cleaned += '}' * max(0, open_braces)
+
+
+    # 5. בריחת מילוט שגויה בעברית: נהפוך את הבק-סלאש לליטרלי
     cleaned = re.sub(r'\\+נ', r'\\\\נ', cleaned)
     
-    # ניקוי תווים בלתי נראים ו-Control Characters
+    # 6. ניקוי תווים בלתי נראים ו-Control Characters
     cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
     
     return cleaned
+
 
 
 def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
@@ -148,12 +177,16 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
     for idx, eng_text in eng_dict.items():
         heb_text = str(heb_dict.get(idx, "")).strip()
         
-        # 0. שדרוג קריטי: הסרת SDH (סוגריים מרובעים, עגולים ומוזיקה) לפני ספירת המילים
-        eng_text_clean = re.sub(r'\[.*?\]|\(.*?\)|♪', '', eng_text)
+        # 0. שדרוג קריטי: הסרת SDH ותגיות לפני ספירת המילים
+        # מסיר: [SDH], (SDH), ♪, ותגיות HTML <...>
+        eng_text_clean = re.sub(r'\[.*?\]|\(.*?\)|♪|<.*?>', ' ', eng_text)
+        heb_text_clean = re.sub(r'\[.*?\]|\(.*?\)|♪|<.*?>', ' ', heb_text)
         
         # Count words for batch density and single-block ratio - עכשיו סופר רק מילים אמיתיות!
-        eng_wc = len(re.findall(r'\w+', eng_text_clean))
-        heb_wc = len(re.findall(r'\w+', heb_text))
+        eng_wc = len([w for w in eng_text_clean.split() if any(c.isalnum() for c in w)])
+        heb_wc = len([w for w in heb_text_clean.split() if any(c.isalnum() for c in w)])
+
+
         total_eng_words += eng_wc
         total_heb_words += heb_wc
         
@@ -166,14 +199,14 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
                 
             if block_ratio > 2.0:
                 reasons.append(f"Verbosification at index {idx} ({block_ratio:.1f}x)")
-                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} זוהתה חריגה משמעותית באורך התרגום ביחס למקור. דייק את הניסוח כך שיהיה תמציתי כמו באנגלית, והסר כל מידע נוסף שהוספת או הסקת מעבר למה שכתוב במפורש.")
+                heb_reasons.append(f"IDX:{idx}|זוהתה חריגה משמעותית באורך התרגום (Verbosification) ביחס למקור ({block_ratio:.1f}x).")
                 has_expansion_anomaly = True
-            elif block_ratio > 1.5:
+            elif block_ratio > 1.4:
                 reasons.append(f"High expansion at index {idx} ({block_ratio:.1f}x)")
-                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום ארוך יחסית למקור ({block_ratio:.1f}x). נסה לנסח בצורה תמציתית יותר מבלי לאבד מידע מהותי.")
+                heb_reasons.append(f"IDX:{idx}|התרגום ארוך יחסית למקור (High expansion) ({block_ratio:.1f}x).")
             elif block_ratio < 0.4 and eng_wc >= 4:
                 reasons.append(f"Extreme omission at index {idx} ({block_ratio:.1f}x)")
-                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} התרגום קצר ביחס לאורך המקור. ודא שלא הושמט מידע מהותי. אזהרה: אל תתרגם מילולית בראשך! זכור שביטויים באנגלית (כמו 'vote out') מתורגמים לעיתים קרובות למילה אחת בלבד (כמו 'הדחה') בהתאם למילון המונחים. אם הרעיון הכללי נשמר בהצלחה בצורה תמציתית - באחריותך להתעלם מההתרעה ולאשר (true).")
+                heb_reasons.append(f"IDX:{idx}|התרגום קצר משמעותית מאורך המקור (Extreme omission) ({block_ratio:.1f}x).")
 
         # 1. בדיקת "דילוג שקט" (Hebrew empty but Eng not)
         # אם אחרי שניקינו את ה-SDH ואת סימני הפיסוק לא נשאר כלום - זה אינדקס SDH טהור
@@ -184,39 +217,48 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
                 # Flag as 'Silent Skip' ONLY IF the clean source_text contains more than 2 words
                 if eng_wc > 2 or len(eng_text_clean.strip()) > 12:
                     reasons.append(f"Silent Skip at index {idx}")
-                    heb_reasons.append(f"IDX:{idx}|דילגת על אינדקס {idx} (הוא ריק למרות שיש מלל משמעותי במקור).")
+                    heb_reasons.append(f"IDX:{idx}|זוהה דילוג שקט (Silent Skip) - האינדקס ריק למרות שקיים מלל בתרגום.")
 
         # 3. בדיקת אורך שורה במילים (9 מילים בדיוק → Judge; יותר מ-9 → retry בלי Judge)
         sub_lines = heb_text.split('\n')
         for line in sub_lines:
-            wc = len(line.split())
+            # Smart word count: ignore standalone symbols like '-' or '♪'
+            words = [w for w in line.split() if any(c.isalnum() for c in w)]
+            wc = len(words)
             if wc == 9:
                 reasons.append(f"9-word line at index {idx}")
-                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאה שורה ארוכה (9 מילים). ודא שאין חריגה או הוספת מידע.")
+                heb_reasons.append(f"IDX:{idx}|נמצאה שורה המכילה בדיוק 9 מילים. ודא שאין חריגה או הוספת מידע.")
             elif wc > 9:
                 reasons.append(f"More than 9 words in a Hebrew line at index {idx}")
-                heb_reasons.append(f"IDX:{idx}|מעל ל-9 מילים בעברית באותה השורה באינדקס {idx}")
+                heb_reasons.append(f"IDX:{idx}|נמצאה שורה ארוכה מדי (מעל 9 מילים).")
                 has_overlong_hebrew_line = True
 
         # 4. בדיקת תוכן אסור: שמות דוברים, SDH, אנגלית, תווים זרים
         if heb_text:  # Only check content if there IS text
             
-            # בדיקת תווים זרים (כמו סינית, רוסית וכו')
-            foreign_chars = re.findall(r'[^\x00-\x7F\u0590-\u05FF\u200E\u200F\u202A-\u202C\u2018-\u201D\u2026\u2013\u2014\u20AA\u20AC\u00A3\xA0\xB0♪♫]', heb_text)
+            # בדיקת תווים זרים (כמו סינית, רוסית וכו') - משתמש בטקסט הנקי מתגיות
+            foreign_chars = re.findall(r'[^\x00-\x7F\u0590-\u05FF\u200E\u200F\u202A-\u202C\u2018-\u201D\u2026\u2013\u2014\u20AA\u20AC\u00A3\xA0\xB0♪♫]', heb_text_clean)
             if foreign_chars:
                 reasons.append(f"STRICT: Foreign characters found in {idx} ({''.join(set(foreign_chars))})")
-                heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאו תווים בשפה זרה (למשל סינית, רוסית או סמלים לא מוכרים). חובה להשתמש אך ורק בעברית, אנגלית וסימני פיסוק. מחק את התווים הזרים!")
+                heb_reasons.append(f"IDX:{idx}|נמצאו תווים זרים או סמלים לא מוכרים ({''.join(set(foreign_chars))}).")
             
-            if re.search(r'[a-zA-Z]', heb_text):
+            found_eng = re.findall(r'[a-zA-Z]+', heb_text_clean)
+            if found_eng:
                 # Exempt: all-caps acronyms (CNN, CBS), spelled-out letters (S-I-F-U)
-                is_exempt = bool(
-                    re.fullmatch(r'[A-Z]{2,}', heb_text.strip()) or
-                    re.search(r'\b[A-Z]{2,}\b', heb_text) or
-                    re.search(r'\b[A-Z](-[A-Z])+\b', heb_text)
-                )
-                if not is_exempt:
-                    reasons.append(f"STRICT: English letters found in {idx}")
-                    heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאו אותיות באנגלית למרות שהתרגום אמור להיות בעברית בלבד. חובה למחוק או לתעתק לעברית!")
+                actual_errors = []
+                for word in found_eng:
+                    is_exempt = bool(
+                        re.fullmatch(r'[A-Z]{2,}', word) or
+                        re.search(r'\b[A-Z](-[A-Z])+\b', word)
+                    )
+                    if not is_exempt:
+                        actual_errors.append(word)
+                
+                if actual_errors:
+                    err_str = ", ".join(set(actual_errors))
+                    reasons.append(f"STRICT: English letters found in {idx} ({err_str})")
+                    heb_reasons.append(f"IDX:{idx}|באינדקס {idx} נמצאו מילים באנגלית ({err_str}). חובה לתרגם לעברית או למחוק!")
+
 
             # Refined Speaker Name Check (Checks every line, including dialogue dashes)
             # Looks for: [Optional -] [Name 1-15 chars] :
@@ -253,36 +295,88 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
             reasons.append(f"Tag mismatch in {idx}")
             heb_reasons.append(f"IDX:{idx}|נמצא חוסר התאמה של תגיות HTML התחלתיות וסוגרות באינדקס {idx}.")
             
-        # 7. בדיקת מילים ארוכות מדי (Glitches)
-        words = heb_text.split()
+        # 7. בדיקת מילים ארוכות מדי (Glitches) - משתמש בטקסט הנקי מתגיות
+        words = heb_text_clean.split()
         if any(len(w) > 16 for w in words):
             reasons.append(f"Suspiciously long word in {idx}")
             heb_reasons.append(f"IDX:{idx}|נמצאה מילה ארוכה באופן חריג באינדקס {idx}.")
 
-    # 8. בדיקת כפילויות חשודות (Repetition Loops)
-    indices = list(eng_dict.keys())
+
+    # 8. בדיקת כפילות תוכן בין כתוביות סמוכות (Semantic Echo)
+    # מחפש מקרים בהם סוף כתובית אחת חוזר בתחילת הכתובית הבאה (הזיה נפוצה של LLM)
+    indices = sorted(eng_dict.keys(), key=lambda x: int(x) if str(x).isdigit() else 0)
     for i in range(len(indices) - 1):
         idx1, idx2 = indices[i], indices[i+1]
-        eng1, eng2 = eng_dict[idx1], eng_dict[idx2]
-        heb1, heb2 = str(heb_dict.get(idx1, "")), str(heb_dict.get(idx2, ""))
-        if not heb1 or not heb2: continue
-        eng_sim = difflib.SequenceMatcher(None, eng1, eng2).ratio()
-        heb_sim = difflib.SequenceMatcher(None, heb1, heb2).ratio()
-        if heb_sim > 0.85 and eng_sim < 0.4:
-            reasons.append(f"Suspicious repetition between {idx1}-{idx2}")
-            heb_reasons.append(f"IDX:{idx1},{idx2}|נמצאה חזרתיות חשודה בין אינדקסים {idx1}-{idx2}.")
+        h1 = str(heb_dict.get(idx1, "")).strip().split('\n')
+        h2 = str(heb_dict.get(idx2, "")).strip().split('\n')
+        
+        if h1 and h2:
+            # ניקוי השורה האחרונה של 1 והראשונה של 2 להשוואה (ללא סימני פיסוק וסמלים)
+            last_line = re.sub(r'[.,!?:;♪\-_]+', '', h1[-1]).strip()
+            first_line = re.sub(r'[.,!?:;♪\-_]+', '', h2[0]).strip()
+            
+            # בדיקת כפילות של ביטוי משמעותי (3 מילים ומעלה)
+            wc_last = len([w for w in last_line.split() if any(c.isalnum() for c in w)])
+            if last_line == first_line and wc_last >= 3:
+                # בדיקה האם הכפילות קיימת גם במקור (למשל דיאלוג "- כן. - כן.")
+                e1 = str(eng_dict.get(idx1, "")).strip().lower().split('\n')
+                e2 = str(eng_dict.get(idx2, "")).strip().lower().split('\n')
+                
+                e_repeated = False
+                if e1 and e2:
+                    e_last = re.sub(r'[.,!?:;♪\-_]+', '', e1[-1]).strip()
+                    e_first = re.sub(r'[.,!?:;♪\-_]+', '', e2[0]).strip()
+                    if e_last == e_first and len(e_last.split()) >= 2:
+                        e_repeated = True
+                
+                if not e_repeated:
+                    reasons.append(f"Semantic Echo between {idx1} and {idx2}")
+                    heb_reasons.append(f"IDX:{idx1},{idx2}|זוהתה כפילות תוכן חריגה (Echo) בין כתוביות סמוכות. ודא שהמידע אינו חוזר על עצמו בטעות.")
 
     # 9. בדיקת יחס מילים כולל לבאץ' (Batch Density)
-    # Lower bound: < 0.4 means too much was dropped (likely skipped lines)
-    # Upper bound: > 1.6 triggers judge (SDH-heavy batches skew ratio up)
-    if total_eng_words > 0 and total_heb_words > 0:
+    if total_eng_words > 0:
         batch_ratio = total_heb_words / total_eng_words
-        if batch_ratio < 0.4 or batch_ratio > 1.6:
-            reasons.append(f"Batch Density anomaly ({batch_ratio:.2f})")
-            heb_reasons.append(f"GLOBAL|זוהתה חריגה בצפיפות הטקסט הכללית של הבאץ' (יחס תרגום/מקור של {batch_ratio:.2f}).")
+        if batch_ratio < 0.4 or batch_ratio > 1.3:
+            reasons.append(f"Batch Density anomaly ({batch_ratio:.2f}x)")
+            heb_reasons.append(f"GLOBAL|נפח התרגום הכולל בבאץ' חורג מהנורמה ({batch_ratio:.2f}x).")
 
     skip_judge = has_bracket_sdh or has_overlong_hebrew_line or has_expansion_anomaly or any("STRICT:" in r for r in reasons)
 
     if reasons:
         return True, "; ".join(reasons), "; ".join(heb_reasons), skip_judge
     return False, "", "", False
+
+
+def force_split_overlong_line(text):
+    """
+    Programmatically splits a Hebrew subtitle string into two lines 
+    by inserting a \n at the linguistic midpoint. Used as a fallback 
+    for 'stubborn' LLM responses during minimal batch retries.
+    """
+    if not text:
+        return text
+        
+    # Standard splitting into tokens
+    tokens = text.split()
+    word_indices = []
+    
+    for i, token in enumerate(tokens):
+        # A 'word' matches the auditor logic: must contain at least one alphanumeric char
+        if any(c.isalnum() for c in token):
+            word_indices.append(i)
+            
+    total_words = len(word_indices)
+    
+    # Safety: don't split if it's already tight (though this should only be called if wc > 8)
+    if total_words <= 8:
+        return text
+        
+    # Select the word index that represents the best middle boundary
+    mid_point = total_words // 2
+    split_token_idx = word_indices[mid_point - 1]
+    
+    # Reassemble tokens with a newline at the selected boundary
+    part1 = " ".join(tokens[:split_token_idx + 1])
+    part2 = " ".join(tokens[split_token_idx + 1:])
+    
+    return f"{part1}\n{part2}"

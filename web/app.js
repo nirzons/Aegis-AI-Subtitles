@@ -196,19 +196,23 @@ function renderSegments(segments, upcoming) {
         html += `
         <div class="grid grid-cols-12 gap-4 items-center py-2 border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors">
             <div class="col-span-1 text-center text-xs mono text-neutral-600">${seg.index}</div>
-            <div class="col-span-5 text-sm text-neutral-300 italic">"${escapeHtml(seg.eng)}"</div>
-            <div class="col-span-6 text-right text-[15px] font-semibold text-emerald-400" dir="rtl">"${escapeHtml(seg.heb)}"</div>
+            <div class="col-span-5 text-sm text-neutral-300 not-italic">${renderSrtTags(seg.eng)}</div>
+            <div class="col-span-6 text-right text-[15px] font-semibold text-emerald-400" dir="rtl">${renderSrtTags(seg.heb)}</div>
         </div>`;
     });
+
 
     upcoming.forEach(up => {
         html += `
         <div class="grid grid-cols-12 gap-4 items-center py-2 border-b border-neutral-800/50 opacity-50 border-dashed">
             <div class="col-span-1 text-center text-xs mono text-neutral-600">${up.index}</div>
-            <div class="col-span-5 text-sm text-neutral-300 italic">"${escapeHtml(up.text)}"</div>
+            <div class="col-span-5 text-sm text-neutral-300 not-italic">${renderSrtTags(up.text)}</div>
             <div class="col-span-6 text-right text-sm font-semibold text-neutral-500">Next up...</div>
         </div>`;
     });
+
+
+
 
     const isAtBottom = scrollContainer
         ? scrollContainer.scrollHeight - scrollContainer.scrollTop <= scrollContainer.clientHeight + 50
@@ -222,5 +226,32 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+/**
+ * Renders SRT formatting tags (i, b, u, font) as safe HTML.
+ * Escapes everything first, then restores the specific allowed tags.
+ */
+function renderSrtTags(text) {
+    if (!text) return '';
+    // Escape standard HTML to prevent XSS
+    let escaped = escapeHtml(text);
+    
+    // Restore basic tags: <i>, <b>, <u> and their closing tags
+    // The regex handles potential spaces like < i > or </ i> which sometimes occur in local LLM outputs
+    escaped = escaped.replace(/&lt;\s*(\/?[ibu])\s*&gt;/gi, '<$1>');
+    
+    // Restore font color tags: handles <font color="#RRGGBB"> and <font color=#RRGGBB>
+    // Pattern matches the escaped version of the tags
+    escaped = escaped.replace(/&lt;\s*font\s+color\s*=\s*(&quot;)?(#[a-fA-F0-9]{3,8}|[a-zA-Z0-9]+)(&quot;)?\s*&gt;/gi, (match, q1, color, q2) => {
+        return `<span style="color: ${color}">`;
+    });
+    
+    // Close font tag
+    escaped = escaped.replace(/&lt;\s*\/font\s*&gt;/gi, '</span>');
+    
+    return escaped;
+}
+
+
 
 connect();

@@ -56,7 +56,7 @@ class MainUILayout:
         self.widgets.judge_model_combo.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
 
         create_label(top_frame, "Judge Batch:").grid(row=3, column=2, padx=5, pady=5, sticky=tk.W)
-        self.widgets.judge_batch_var = tk.StringVar(value="20")
+        self.widgets.judge_batch_var = tk.StringVar(value="4")
         self.widgets.judge_batch_entry = ttk.Entry(top_frame, textvariable=self.widgets.judge_batch_var, width=10)
         self.widgets.judge_batch_entry.grid(row=3, column=3, padx=5, pady=5, sticky=tk.W)
 

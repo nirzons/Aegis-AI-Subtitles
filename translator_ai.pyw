@@ -43,7 +43,10 @@ class TranslatorApp:
         self.est_remaining = -1
         self.total_eta_seconds = -1
         self.last_finish_time_str = "--:--"
+        self.perf_history_judge = []
+        self.current_judge_chunk_size = 0
         self.current_is_retry = False
+        self.active_phase = None # "main" or "judge"
         self._timer_after_id = None
         
         # Directories
@@ -350,6 +353,7 @@ class TranslatorApp:
 
                 self.last_batch_size, self.current_is_retry = data
                 self.resp_timer_seconds = 0
+                self.active_phase = "main"
                 
                 # Batch Size Change detection
                 arrow = ""
@@ -410,9 +414,52 @@ class TranslatorApp:
                     self.num_batches_processed += 1
 
                 self.resp_timer_seconds = -1
+                self.active_phase = None
                 self.ui.widgets.lbl_timer.config(text="")
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_timer("")
+            elif type == "judge_timer_start":
+                # Clear previous timer state
+                if hasattr(self, '_timer_after_id') and self._timer_after_id:
+                    self.root.after_cancel(self._timer_after_id)
+                    self._timer_after_id = None
+
+                self.current_judge_chunk_size = data
+                self.resp_timer_seconds = 0
+                self.active_phase = "judge"
+
+                # Calculate estimation for judge chunk
+                self.est_remaining = -1
+                history = self.perf_history_judge
+                n = len(history)
+                if n >= 2:
+                    sum_x = sum(h[1] for h in history)
+                    sum_y = sum(h[0] for h in history)
+                    sum_xy = sum(h[0] * h[1] for h in history)
+                    sum_x2 = sum(h[1]**2 for h in history)
+                    denominator = (n * sum_x2 - sum_x**2)
+                    if denominator != 0:
+                        a = (n * sum_xy - sum_x * sum_y) / denominator
+                        b = (sum_y - a * sum_x) / n
+                        a = max(0.1, a)
+                        self.est_remaining = int(max(2, b + a * self.current_judge_chunk_size))
+                    else:
+                        avg_sec = sum_y / sum_x
+                        self.est_remaining = int(avg_sec * self.current_judge_chunk_size)
+                elif n == 1:
+                    avg_sec = history[0][0] / history[0][1]
+                    self.est_remaining = int(avg_sec * self.current_judge_chunk_size)
+
+                est_str = f" / ⚖️ Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining > 0 else ""
+                self.ui.widgets.lbl_timer.config(text=f"⚖️ {self._fmt_seconds(self.resp_timer_seconds)}{est_str}")
+                self._tick_timer()
+            elif type == "judge_timer_stop":
+                if self.resp_timer_seconds > 0 and getattr(self, 'current_judge_chunk_size', 0) > 0:
+                    self.perf_history_judge.append((self.resp_timer_seconds, self.current_judge_chunk_size))
+                
+                self.resp_timer_seconds = -1
+                self.active_phase = None
+                # Note: We don't clear the label here yet to keep it visible for a split second until judge_progress or judge_stop
             elif type == "judge_start":
                 self.ui.widgets.lbl_status.config(text="⚖️ JUDGING...", fg="#9b59b6")
                 if self.ui.widgets.web_gui_var.get():
@@ -422,6 +469,14 @@ class TranslatorApp:
                 self.ui.widgets.lbl_status.config(text=f"⚖️ JUDGING {c}/{t}...", fg="#9b59b6")
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.update_status(f"⚖️ JUDGING {c}/{t}...", "#9b59b6")
+            elif type == "judge_stop":
+                self.ui.widgets.lbl_status.config(text="")
+                self.ui.widgets.lbl_timer.config(text="")
+                self.resp_timer_seconds = -1
+                self.active_phase = None
+                if self.ui.widgets.web_gui_var.get():
+                    self.shared_state.update_status("Idle", "#7f8c8d")
+                    self.shared_state.update_timer("")
             elif type == "batch_success": 
                 self.ui.widgets.lbl_status.config(text="")
                 if self.ui.widgets.web_gui_var.get():
@@ -579,16 +634,22 @@ class TranslatorApp:
                 self.est_remaining -= 1
             
             # Dynamic ETA Countdown
-            if self.total_eta_seconds > 0:
-                self.total_eta_seconds -= 1
-                new_eta_str = self._fmt_eta_full(self.total_eta_seconds)
-                self.ui.widgets.lbl_eta.config(text=f"ETA: {new_eta_str} | End: {self.last_finish_time_str}")
-                if self.ui.widgets.web_gui_var.get():
-                    self.shared_state.update_eta(new_eta_str, self.last_finish_time_str)
+            if getattr(self, 'active_phase', None) == "main":
+                if self.total_eta_seconds > 0:
+                    self.total_eta_seconds -= 1
+                    new_eta_str = self._fmt_eta_full(self.total_eta_seconds)
+                    self.ui.widgets.lbl_eta.config(text=f"ETA: {new_eta_str} | End: {self.last_finish_time_str}")
+                    if self.ui.widgets.web_gui_var.get():
+                        self.shared_state.update_eta(new_eta_str, self.last_finish_time_str)
 
-            tag = "🔄 RETRY " if getattr(self, 'current_is_retry', False) else ""
-            est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
-            timer_text = f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}"
+            if getattr(self, 'active_phase', None) == "judge":
+                est_str = f" / ⚖️ Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
+                timer_text = f"⚖️ {self._fmt_seconds(self.resp_timer_seconds)}{est_str}"
+            else:
+                tag = "🔄 RETRY " if getattr(self, 'current_is_retry', False) else ""
+                est_str = f" / 📦 Est: {self._fmt_seconds(self.est_remaining)}" if self.est_remaining >= 0 else ""
+                timer_text = f"⏱️ {tag}{self._fmt_seconds(self.resp_timer_seconds)}{est_str}"
+            
             self.ui.widgets.lbl_timer.config(text=timer_text)
             if self.ui.widgets.web_gui_var.get():
                 self.shared_state.update_timer(timer_text)

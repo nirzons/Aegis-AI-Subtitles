@@ -25,7 +25,7 @@ class SettingsManager:
                 "3": { "name": "gpt-4o", "provider": "openai", "batch_size": 25, "temperature": 0.02, "input_price": 2.50, "output_price": 10.00, "cache_discount": 0.0 },
                 "4": { "name": "gpt-4o-mini", "provider": "openai", "batch_size": 12, "temperature": 0.02, "input_price": 0.15, "output_price": 0.60, "cache_discount": 0.0 },
                 "5": { "name": "deepseek-chat", "provider": "deepseek", "batch_size": 20, "temperature": 0.0, "input_price": 0.28, "output_price": 0.42, "cache_discount": 90.0 },
-                "6": { "name": "local-model", "provider": "lmstudio", "batch_size": 8, "temperature": 0.0, "input_price": 0.0, "output_price": 1000000.0, "cache_discount": 0.0 },
+                "6": { "name": "local-model", "provider": "lmstudio", "batch_size": 10, "temperature": 0.0, "input_price": 0.0, "output_price": 1000000.0, "cache_discount": 0.0 },
                 "7": { "name": "gpt-5-nano", "provider": "openai", "batch_size": 20, "temperature": 1.0, "input_price": 0.05, "output_price": 0.4, "cache_discount": 90.0 }
             }
         }

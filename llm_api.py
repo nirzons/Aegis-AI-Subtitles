@@ -38,7 +38,107 @@ def is_process_alive(pid):
             return True
 
 
-def call_llm(model_cfg, system_prompt, user_prompt, api_key):
+
+def generate_batch_schema(indices_list, use_scratchpad=True):
+    """Generates a dynamic JSON schema for primary translation."""
+    # Use dict.fromkeys for deduplication while preserving order (important for schema clarity)
+    indices = [str(i) for i in indices_list]
+    indices = list(dict.fromkeys(indices))
+    srt_properties = {idx: {"type": "string"} for idx in indices}
+    
+    # Standard properties reordered for maximum model focus (Sandwich Structure)
+    # 1. Strategy & Priming
+    properties = {
+        "thought_process": {
+            "type": "string", 
+            "description": "תהליך המחשבה, האסטרטגיה וההתלבטויות לפני התרגום הסופי. אזהרה: אל תעתיק את תיאור השדה! כתוב את מחשבותיך האמיתיות."
+        },
+        "summary": {
+            "type": "string",
+            "description": "תקציר קצר של המתרחש בעלילה כרגע. אזהרה: אל תעתיק את תיאור השדה! כתוב תקציר אמיתי."
+        }
+    }
+    
+    required_fields = ["thought_process", "summary"]
+    
+    # 2. Scratchpad (Optional)
+    if use_scratchpad:
+        properties["continuous_translation_draft"] = {
+            "type": "string",
+            "description": "תרגום כל הטקסטים כפסקה אחת רציפה, טבעית וזורמת."
+        }
+        properties["mapping_plan"] = {
+            "type": "string",
+            "description": "תוכנית מיפוי תמציתית של חלוקת הטיוטה לאינדקסים."
+        }
+        required_fields.extend(["continuous_translation_draft", "mapping_plan"])
+
+    # 3. The Core Work
+    properties["translated_srt"] = {
+        "type": "object",
+        "properties": srt_properties,
+        "required": indices,
+        "additionalProperties": False,
+        "description": "מילון שקידודו הוא האינדקסים המספריים והערכים הם התרגומים הסופיים לעברית."
+    }
+    required_fields.append("translated_srt")
+
+    # 4. Bookkeeping (Moved to the end)
+    properties["last_speaker_info"] = {
+        "type": "string",
+        "description": "שם הדובר (M/F) פונה אל יעד (M/F/לא ידוע/מצלמה)."
+    }
+    properties["continuity_note"] = {
+        "type": ["string", "null"],
+        "description": "הוראת רצף לבאץ' הבא (השאר ריק אם אין)."
+    }
+    required_fields.extend(["last_speaker_info", "continuity_note"])
+    
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required_fields,
+        "additionalProperties": False
+    }
+
+
+def generate_judge_schema(indices_list):
+    """Generates a dynamic JSON schema for the AI Judge."""
+    # Use dict.fromkeys for deduplication while preserving order
+    indices = [str(i) for i in indices_list]
+    indices = list(dict.fromkeys(indices))
+    # Error map keys are dynamic indices
+    error_map_properties = {idx: {"type": "string"} for idx in indices}
+    
+    return {
+        "type": "object",
+        "properties": {
+            "thought_process": {
+                "type": "string",
+                "description": "תהליך המחשבה של השופט, השוואה בין מקור לתרגום וזיהוי טעויות. אזהרה: אל תעתיק את תיאור השדה!"
+            },
+            "summary": {
+                "type": "string",
+                "description": "תקציר קצר מאוד (משפט אחד) של תוכן הבאץ' כדי לוודא הבנה. אזהרה: אל תעתיק את תיאור השדה!"
+            },
+            "is_valid": {
+                "type": "boolean",
+                "description": "האם התרגום תקין (true) או שיש לפסול אותו (false) בשל שגיאה חמורה."
+            },
+            "error_map": {
+                "type": "object",
+                "properties": error_map_properties,
+                "required": indices, # OpenAI Strict mode requires all properties to be listed in required
+                "additionalProperties": False,
+                "description": "מיפוי אינדקסים לשגיאות שנמצאו. חובה להחזיר מחרוזת ריקה \"\" עבור אינדקסים ללא שגיאה."
+            }
+        },
+        "required": ["thought_process", "summary", "is_valid", "error_map"],
+        "additionalProperties": False
+    }
+
+def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False):
+
     current_temp = model_cfg.get('temperature', 0.15)
     
     if model_cfg['provider'] == 'google':
@@ -83,11 +183,33 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": current_temp,
-                "response_format": {"type": "json_object"}
+                "temperature": current_temp
             }
             
+            # OpenAI Structured Outputs (Strict Mode) check:
+            # Requires gpt-4o, gpt-4o-mini, or o1 (if not using developer role)
+            # OR LM Studio (which supports it in latest versions)
+            supports_structured = (model_cfg['provider'] == 'openai' and 
+                                 any(m in model_cfg['name'].lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
+                                 (model_cfg['provider'] == 'lmstudio')
+            
+            if indices_list and supports_structured:
+                use_scratch = model_cfg.get('enable_scratchpad', True)
+                schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
+                req_params["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "audit_output" if is_judge else "translation_output",
+                        "strict": True,
+                        "schema": schema
+                    }
+                }
+
+            else:
+                req_params["response_format"] = {"type": "json_object"}
+            
         response = client.chat.completions.create(**req_params)
+
         
         raw_content = response.choices[0].message.content
         # Strip markdown if model added it
@@ -138,23 +260,68 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key):
     
     elif model_cfg['provider'] == 'lmstudio':
         client = OpenAI(api_key=api_key, base_url="http://localhost:1234/v1", timeout=2700.0, max_retries=0)
-        final_llm_input = (
-            "### הנחיות וכללים ###\n"
-            f"{system_prompt}\n\n"
-            "### משימה ונתונים לתרגום ###\n"
-            "אתה מתרגם עכשיו את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.\n"
-            f"{user_prompt}\n\n"
-            "### תשובה סופית ###\n"
-            "ענה עכשיו בפורמט JSON, כאשר שדה ה-text מתורגם לעברית בלבד:"
-        )    
-        response = client.chat.completions.create(
-            model=model_cfg['name'],
-            messages=[{"role": "user", "content": final_llm_input}],
-            temperature=current_temp,
-            max_tokens=6144,
-            response_format={"type": "text"}
-        )
-        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
+        
+        # Check for Structured Output support
+        # Check for Structured Output support
+        if indices_list:
+            # Prepare the call parameters
+            req_params = {
+                "model": model_cfg['name'],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": current_temp
+            }
+            
+            # Use 'json_schema' (Strict Mode) for OpenAI high-end models AND LM Studio models.
+            # While some local models might struggle, newer ones like Gemma-2-27b-it perform better with it.
+            if (model_cfg['provider'] == 'openai' and any(m in model_cfg['name'].lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or model_cfg['provider'] == 'lmstudio':
+                use_scratch = model_cfg.get('enable_scratchpad', True)
+                schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
+                req_params["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "audit_output" if is_judge else "translation_output",
+                        "strict": True,
+                        "schema": schema
+                    }
+                }
+            
+            # Call the LLM (response_format is included if supported/requested above)
+            response = client.chat.completions.create(**req_params)
+
+            
+            # Extract content with fallback for 'reasoning_content' (critical for DictaLM-Thinking)
+            message = response.choices[0].message
+            raw_content = getattr(message, 'content', "") or ""
+            if not raw_content or not raw_content.strip():
+                # Check for reasoning_content if standard content is empty
+                raw_content = getattr(message, 'reasoning_content', "") or ""
+            
+            return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
+
+
+        else:
+            # Fallback to old manual prompt style for non-batch calls if any
+            final_llm_input = (
+                "### הנחיות וכללים ###\n"
+                f"{system_prompt}\n\n"
+                "### משימה ונתונים לתרגום ###\n"
+                "אתה מתרגם עכשיו את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.\n"
+                f"{user_prompt}\n\n"
+                "### תשובה סופית ###\n"
+                "ענה עכשיו בפורמט JSON, כאשר שדה ה-text מתורגם לעברית בלבד:"
+            )    
+            response = client.chat.completions.create(
+                model=model_cfg['name'],
+                messages=[{"role": "user", "content": final_llm_input}],
+                temperature=current_temp,
+                max_tokens=6144,
+                response_format={"type": "text"}
+            )
+            return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
+
 
 
 def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_lookup):
@@ -204,7 +371,8 @@ def call_llm_judge(
     log_func=None,
     file_log_func=None,
     audit_reason_heb=None,
-    progress_func=None
+    progress_func=None,
+    ui_queue=None
 ):
     """Audits a suspicious translation using an AI Judge in chunks."""
     if not api_key:
@@ -214,19 +382,40 @@ def call_llm_judge(
         chunk_size = int(judge_batch_size)
     except ValueError:
         chunk_size = 20
+    # Structured Outputs check for Judge optimization
+    supports_structured = (judge_model_cfg.get('provider') == 'openai' and 
+                         any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
+                         (judge_model_cfg.get('provider') == 'lmstudio')
 
-    system_prompt = """
-אתה אודיטור QA דטרמיניסטי. תפקידך להשוות מילוני תרגום (מקור מול תוצאה) על בסיס חוקים בינאריים בלבד.
-נתון לך גם CONTEXTUAL OVERLAP: שורת מקור/תרגום אחת לפני ואחת אחרי הבאץ' הנבדק — לצורך הקשר בלבד.
-החזר אך ורק JSON חוקי במבנה הבא:
+    schema_instruction = """החזר אך ורק JSON חוקי במבנה הבא:
 {
-  "thought_process": "בחר את האינדקס הכי חשוד. השווה מקור לתרגום. אם נראית השמטה או עיוות, בדוק בהקשר ה-OVERLAP (לפני/אחרי) אם המידע 'זלג' לכתובית סמוכה. אם המשמעות הכוללת של הבאץ' יחד עם ההקשר נשמרת — סמן valid. אם יש שינוי משמעות מהותי, סתירה לוגית, או המצאה — פסול.",
+  "thought_process": "בחר את האינדקס הכי חשוד. השווה מקור לתרגום. בדוק בהקשר ה-OVERLAP (לפני/אחרי) אם המידע 'זלג' לכתובית סמוכה. אם המשמעות הכוללת נשמרת — סמן valid. אם יש שינוי משמעות מהותי, סתירה לוגית, או המצאה — פסול.",
+  "summary": "תקציר קצר מאוד (משפט אחד) של תוכן הבאץ'.",
   "is_valid": true,
   "error_map": { 
-    "103": "אם false, ציין עבור כל אינדקס רלוונטי את השגיאה (מפתח: אינדקס, ערך: סיבה). אם true, השאר ריק או חסר."
+    "103": "אם false, ציין עבור כל אינדקס רלוונטי את השגיאה (מפתח: אינדקס, ערך: סיבה)."
   }
-}
-"""
+}""" if not supports_structured else "השב בפורמט ה-JSON Schema המוגדר בלבד."
+
+    system_prompt = f"""אתה אודיטור QA דטרמיניסטי. תפקידך להשוות מילוני תרגום (מקור מול תוצאה) ולהחליט אם התרגום תקין.
+נתון לך גם CONTEXTUAL OVERLAP: שורת מקור/תרגום אחת לפני ואחת אחרי הבאץ' הנבדק — לצורך הקשר בלבד.
+
+### תהליך העבודה (חובה) ###
+שלב 1: (thought_process) - נתח את האינדקסים. השווה מקור לתרגום.
+שלב 2: (summary) - כתוב תקציר קצר מאוד (משפט אחד) של תוכן הבאץ' כדי לוודא שהבנת את ההקשר.
+שלב 3: (is_valid) - קבע האם התרגום תקין (true/false) על סמך החוקים להלן.
+שלב 4: (error_map) - עליך להחזיר מילון שבו המפתחות הם כל האינדקסים שנבדקו בבאץ' הנוכחי. עבור כל אינדקס בעייתי, כתוב סיבה מפורטת. עבור כל אינדקס תקין, חובה להחזיר מחרוזת ריקה (""). אל תדלג על אף אינדקס.
+
+### חוקי ביקורת דטרמיניסטיים (פסול/false אם לפחות אחד חל) ###
+1. OMISSION: פסול (false) אם ערך TRANSLATED הוא ריק ("") למרות שהמקור מכיל מלל מדובר. חריג: מותר שהתרגום יהיה ריק אם המקור מכיל עד 2 מילים בלבד והמשמעות שלהן הוטמעה בכתובית סמוכה. חריג קריטי: טקסט בסוגריים [ ] או ( ) הוא אפקט קולי (SDH) וחובה שיוחזר כמחרוזת ריקה ("").
+2. DUPLICATION: ערך TRANSLATED זהה לחלוטין לערך קודם באותו באץ', בעוד שהמקור שונה מהותית.
+3. LEAKAGE (דליפה): פסול אם נשאר שם דובר עם נקודתיים (למשל "JEFF:"). חובה למחוק תגיות זיהוי! (שמות בתוך הדיאלוג הם תקינים).
+4. ENGLISH: קיימות אותיות באנגלית (מלבד שמות מותגים, ראשי תיבות, או תגיות עיצוב כמו <i>).
+5. SEMANTIC FIDELITY: פסול רק אם יש שינוי משמעות מהותי, סתירה לוגית, או המצאה (Hallucination).
+6. GENDER: פער במגדר (זכר/נקבה) אינו עילה לפסילה אלא אם המגדר מצוין במפורש בכינויי גוף בתוך הטקסט הנבדק (למשל: המקור אומר "He said" ותורגם כ-"היא אמרה").
+
+{schema_instruction}"""
+
     total_in, total_out, total_cached, total_reasoning = 0, 0, 0, 0
     master_error_map = {}
     is_overall_valid = True
@@ -310,24 +499,26 @@ TRANSLATED (HEBREW):
                     reasons_text = "\n".join(formatted_reasons)
                     user_prompt += f"\n### אתה הופעלת בגלל הבעיה הבאה שהתגלתה: ###\n{reasons_text}\n\n"
 
-        user_prompt += """### DETERMINISTIC AUDIT RULES (Fail/false IF ANY APPLY) ###
-1. OMISSION: פסול (false) אם ערך TRANSLATED הוא ריק ("") למרות שהמקור מכיל מלל מדובר. **חריג זליגה**: מותר שהתרגום יהיה ריק אם המקור מכיל עד 2 מילים בלבד והמשמעות שלהן הוטמעה בכתובית סמוכה. **חריג קריטי**: כל טקסט שמוקף כולו בסוגריים מרובעים או עגולים (למשל [exclaims], [laughs], (sigh)) מוגדר כאפקט קולי (SDH) ולא כדיאלוג! כמו כן, תווים מוזיקליים (♪). עבור כל אלה, הערך בתרגום חייב להיות מחרוזת ריקה (""). לעולם אל תפסול שורה ריקה אם הטקסט במקור היה עטוף בסוגריים!
-2. DUPLICATION: ערך TRANSLATED זהה לחלוטין לערך TRANSLATED קודם באותו באץ', בעוד שה-SOURCE המקביל שלהם שונה מהותית.
-3. LEAKAGE (דליפה): פסול (false) אם נשאר בתוך הטקסט העברי שם של דובר ואחריו נקודתיים (למשל "SIFU:" או "אמילי:" או "ג'ף:"). חובה למחוק שמות דוברים המופיעים כתגית זיהוי בתחילת השורה! **אזהרה קריטית**: שמות המופיעים כחלק מהדיאלוג (למשל "היי ג'ף, מה קורה?") הם תקינים לחלוטין ואסור למחוק אותם. הפסילה היא אך ורק על תגיות זיהוי (Speaker Labels) המלוות בנקודתיים. אם השם מופיע ללא נקודתיים כחלק מהמשפט - אשר (true).
-4. ENGLISH: קיימות אותיות באנגלית ב-TRANSLATED. התעלם (אל תפסול) אם מדובר בשם מותג מובהק, ראשי תיבות, איות של מילה (כמו S-I-F-U) או אותיות בודדות המשמשות לתיאור צורה/סמל (כמו האות I, צורת V או הסימון X). אם האות האנגלית נמצאת שם מסיבה לוגית ומוצדקת זו - החזר true.
-5. SEMANTIC FIDELITY, IDIOMS & ALLOWED DRIFT (תוכן, ניבים וזליגה): **פסול (false) רק אם** יש שינוי משמעות **מהותי**, סתירה לוגית למקור, המצאה (Hallucination), או השמטת מונח מפתח שלא מופיע בשום אינדקס סמוך ב-OVERLAP ובגוף הבאץ' הנבדק. **תרגום ביטויים (Idioms): אל תדרוש תרגום מילולי (Word-for-Word). אשר תרגומים שמעבירים את הכוונה והרוח של המקור בצורה טבעית לעברית.** **השמטות זניחות (Micro-Omissions): אל תפסול על מילים קטנות, מילות קישור, או ביטויי סלנג ותוספות (כמו "in there", "just", "like") שלא תורגמו מילולית, כל עוד הרעיון המרכזי הועבר.** **זליגה מותרת (Shifting):** העברת ניסוח בין אינדקסים **סמוכים** לטובת עברית טבעית — **מותרת** אם **מסת הקול** נשמרת ביחד עם ה-OVERLAP. **לפני פסילה על «השמטה»:** וודא שהחומר «החסר» לא מופיע בתרגום האינדקס **הקודם או הבא** (כולל שורות OVERLAP). **שיוך שגיאות מדויק (קריטי):** אם מצאת שגיאה, **חובה לשייך אותה אך ורק לאינדקס המקורי שבו מופיע הטקסט המקביל באנגלית**. לעולם אל תדווח על שגיאה באינדקס הקודם או הבא. **ספק לטובת המתרגם:** אם חוקים **1–4** מתקיימים והמשמעות הכללית נשמרת עם ה-OVERLAP — **אשר (true)**.
-6. GENDER (מגדר): פער במגדר הדובר (למשל, תרגום "Sorry" כ"מצטערת" במקום "מצטער" או להפך) **אינו** עילה לפסילה (החזר true). קבל כל הטיה מגדרית כתקינה לחלוטין. מותר לך לפסול על שגיאת מגדר (false) **רק** אם המגדר מצוין במפורש בכינויי גוף בתוך הטקסט הנבדק עצמו (לדוגמה: המקור אומר "He said" ותורגם כ-"היא אמרה").
-
-אזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'false' בגלל מילה או תגית, ודא שהיא אכן מודפסת פיזית בתוך הערך של ה-TRANSLATED. חוקים 5 ו-6 **אינם** דוחים חוקים 1–4.
-"""
+        user_prompt += "### סוף נתונים ###\n"
+        user_prompt += "\nאזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'false' בגלל מילה או תגית, ודא שהיא אכן מודפסת פיזית בתוך הערך של ה-TRANSLATED. חוקים 5 ו-6 אינם דוחים חוקים 1-4.\n"
         try:
             if log_func:
                 log_func(f"   ↳ ⏳ Judge Chunk {idx+1}/{len(chunks)} [{chunk_indices[0]}–{chunk_indices[-1]}]: sending...")
             if file_log_func:
                 file_log_func(f"--- JUDGE CHUNK {idx+1} SYSTEM PROMPT START ---\n{system_prompt}\n--- JUDGE CHUNK {idx+1} SYSTEM PROMPT END ---")
                 file_log_func(f"--- JUDGE CHUNK {idx+1} USER PROMPT START ---\n{user_prompt}\n--- JUDGE CHUNK {idx+1} USER PROMPT END ---")
+                # Log Structured Output Schema for Judge
+                j_schema_dump = json.dumps(generate_judge_schema(chunk_indices), ensure_ascii=False, indent=2)
+                file_log_func(f"--- JUDGE CHUNK {idx+1} STRUCTURED OUTPUT SCHEMA ---\n{j_schema_dump}\n")
+
             
-            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(judge_model_cfg, system_prompt, user_prompt, api_key)
+            if ui_queue:
+                ui_queue.put(("judge_timer_start", len(chunk_indices)))
+
+            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(judge_model_cfg, system_prompt, user_prompt, api_key, indices_list=chunk_indices, is_judge=True)
+            
+            if ui_queue:
+                ui_queue.put(("judge_timer_stop", None))
             
             if file_log_func:
                 file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{raw_res}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
