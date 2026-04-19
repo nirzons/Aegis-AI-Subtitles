@@ -671,7 +671,7 @@ class TranslatorApp:
                 self.est_remaining -= 1
             
             # Dynamic ETA Countdown
-            if getattr(self, 'active_phase', None) == "main":
+            if getattr(self, 'active_phase', None) in ["main", "judge"]:
                 if self.total_eta_seconds > 0:
                     self.total_eta_seconds -= 1
                     new_eta_str = self._fmt_eta_full(self.total_eta_seconds)
