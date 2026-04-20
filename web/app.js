@@ -130,11 +130,20 @@ function updateUI(state) {
 function generateSparkline(history) {
     if (!history || history.length === 0) return '';
     const ticks = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    const min = Math.min(...history);
-    const max = Math.max(...history);
-    const range = max - min || 1;
-    return history.map(val => {
-        const index = Math.floor(((val - min) / range) * (ticks.length - 1));
+    
+    // FORENSIC SCALING: Use an absolute ceiling of 1.2 ch/s (engine peak average)
+    // This ensures consistency across different sessions.
+    const ceiling = 1.2; 
+
+    // Reverse history so newest is on the LEFT
+    return [...history].reverse().map(val => {
+        if (val < 0.05) return ticks[0]; // Negligible speed
+        
+        // Calculate index based on absolute performance vs the ceiling
+        // Min visible index is 1 (▂)
+        let index = 1 + Math.floor((val / ceiling) * (ticks.length - 2));
+        index = Math.max(1, Math.min(index, ticks.length - 1));
+        
         return ticks[index];
     }).join('');
 }

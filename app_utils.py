@@ -109,3 +109,18 @@ def load_srt_full_history(path):
             # Restore logical RTL for the web browser
             out[idx] = {"time": timestamp, "text": unfix_rtl(text)}
     return out
+
+def pretty_json(obj):
+    """Attempts to parse and return a pretty-printed JSON string. If fails, returns original."""
+    if not obj: return ""
+    if isinstance(obj, str):
+        try:
+            # If it's a string, try to parse it first
+            parsed = json.loads(obj)
+            return json.dumps(parsed, indent=4, ensure_ascii=False)
+        except Exception:
+            return obj
+    try:
+        return json.dumps(obj, indent=4, ensure_ascii=False)
+    except Exception:
+        return str(obj)

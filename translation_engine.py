@@ -13,7 +13,7 @@ from constants import (
 
 from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch, force_split_overlong_line
 from llm_api import call_llm, call_llm_judge, generate_batch_schema
-from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text, load_srt_full_history
+from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text, load_srt_full_history, pretty_json
 
 from translation_stats import _inc_by_size, make_stats, print_stats
 
@@ -285,6 +285,8 @@ class TranslationEngine:
                 log(self.log_queue, session_log_file, f"📦 Batch Size: {effective_batch_size} | Safety Net: ACTIVE")
 
             self.ui_queue.put(("progress", (processed, total_blocks)))
+            if self.shared_state:
+                self.shared_state.update_progress(processed, total_blocks)
 
             # Pre-seed web dashboard and desktop GUI with historical context on resume
             if resume_mode:
@@ -539,8 +541,7 @@ class TranslationEngine:
 
                             # V3 Telemetry Hook: Speed and Cache
                             if self.shared_state:
-                                chars_per_sec = batch_load / _call_duration if _call_duration > 0 else 0
-                                self.shared_state.update_telemetry(cache_hit_percent=int(hit_pct), tokens_per_sec=chars_per_sec)                                
+                                self.shared_state.update_telemetry(cache_hit_percent=int(hit_pct)) 
                             
                             brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
                             brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({brain_load:.1f}%)" if reasoning_tokens > 0 else ""
@@ -972,10 +973,10 @@ class TranslationEngine:
 
                             if not batch_diagnostics_logged:
                                 file_log(session_log_file, f"--- BATCH {batch_label} FAILURE DIAGNOSTICS (PRIMARY) ---")
-                                file_log(session_log_file, f"SYSTEM PROMPT:\n{_batch_system_prompt}")
-                                file_log(session_log_file, f"USER PROMPT:\n{_batch_user_prompt}")
+                                file_log(session_log_file, f"SYSTEM PROMPT:\n{pretty_json(_batch_system_prompt)}")
+                                file_log(session_log_file, f"USER PROMPT:\n{pretty_json(_batch_user_prompt)}")
                                 if raw_res is not None:
-                                    file_log(session_log_file, f"RAW LLM RESPONSE:\n{raw_res}")
+                                    file_log(session_log_file, f"RAW LLM RESPONSE:\n{pretty_json(raw_res)}")
                                 else:
                                     file_log(session_log_file, f"RAW LLM RESPONSE: None (call_llm failed)")
                                 file_log(session_log_file, f"ERROR: {e}")
@@ -1054,6 +1055,9 @@ class TranslationEngine:
 
                     self.ui_queue.put(("progress", (processed, total_blocks)))
                     self.ui_queue.put(("eta", (time_str, finish_str, eta_secs)))
+                    if self.shared_state:
+                        self.shared_state.update_progress(processed, total_blocks)
+                        self.shared_state.update_eta(time_str, finish_str)
                         
             if not self.should_stop:
                 log(self.log_queue, session_log_file, f"\n✅ Translation Complete!")

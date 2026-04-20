@@ -505,8 +505,14 @@ TRANSLATED (HEBREW):
             if log_func:
                 log_func(f"   ↳ ⏳ Judge Chunk {idx+1}/{len(chunks)} [{chunk_indices[0]}–{chunk_indices[-1]}]: sending...")
             if file_log_func:
-                file_log_func(f"--- JUDGE CHUNK {idx+1} SYSTEM PROMPT START ---\n{system_prompt}\n--- JUDGE CHUNK {idx+1} SYSTEM PROMPT END ---")
-                file_log_func(f"--- JUDGE CHUNK {idx+1} USER PROMPT START ---\n{user_prompt}\n--- JUDGE CHUNK {idx+1} USER PROMPT END ---")
+                def safe_pretty(text):
+                    try:
+                        return json.dumps(json.loads(text), indent=4, ensure_ascii=False)
+                    except:
+                        return text
+                
+                file_log_func(f"--- JUDGE CHUNK {idx+1} SYSTEM PROMPT START ---\n{safe_pretty(system_prompt)}\n--- JUDGE CHUNK {idx+1} SYSTEM PROMPT END ---")
+                file_log_func(f"--- JUDGE CHUNK {idx+1} USER PROMPT START ---\n{safe_pretty(user_prompt)}\n--- JUDGE CHUNK {idx+1} USER PROMPT END ---")
                 # Log Structured Output Schema for Judge
                 j_schema_dump = json.dumps(generate_judge_schema(chunk_indices), ensure_ascii=False, indent=2)
                 file_log_func(f"--- JUDGE CHUNK {idx+1} STRUCTURED OUTPUT SCHEMA ---\n{j_schema_dump}\n")
@@ -525,7 +531,7 @@ TRANSLATED (HEBREW):
                 ui_queue.put(("judge_timer_stop", chunk_load))
             
             if file_log_func:
-                file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{raw_res}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
+                file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{safe_pretty(raw_res)}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
             
             total_in += in_tokens
             total_out += out_tokens

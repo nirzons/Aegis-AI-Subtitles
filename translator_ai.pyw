@@ -245,6 +245,15 @@ class TranslatorApp:
         
         log(self.log_queue, self.session_log_file, "✅ File lists refreshed.")
 
+    def restart_app(self):
+        """Cleanly restarts the entire application to reload code changes."""
+        log(self.log_queue, self.session_log_file, "🔄 Restarting application to reload modules...")
+        self.on_closing() # Trigger cleanup
+        
+        # Replace current process with a fresh one
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+
     def start_translation(self):
         if self.is_running: return
         
@@ -507,7 +516,7 @@ class TranslatorApp:
         for w in [self.ui.widgets.model_combo, self.ui.widgets.batch_entry, self.ui.widgets.srt_combo, 
                   self.ui.widgets.sysprm_combo, self.ui.widgets.judge_model_combo, self.ui.widgets.judge_batch_entry,
                   self.ui.widgets.resume_combo, self.ui.widgets.btn_settings, self.ui.widgets.btn_manage_checkpoints,
-                  self.ui.widgets.btn_refresh, self.ui.widgets.btn_start]:
+                  self.ui.widgets.btn_restart, self.ui.widgets.btn_start]:
             w.config(state=state)
         self.ui.widgets.btn_stop.config(state=tk.NORMAL if state == tk.DISABLED else tk.DISABLED)
         self.ui.widgets.btn_open_translated.config(state=tk.NORMAL)

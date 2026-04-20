@@ -77,8 +77,8 @@ class MainUILayout:
         ctrl_frame = ttk.Frame(self.root)
         ctrl_frame.pack(fill=tk.X, padx=15, pady=10)
 
-        self.widgets.btn_refresh = ttk.Button(ctrl_frame, text="🔄 Refresh", command=app.refresh_files)
-        self.widgets.btn_refresh.pack(side=tk.LEFT, padx=5)
+        self.widgets.btn_restart = ttk.Button(ctrl_frame, text="🔄 Restart", command=app.restart_app)
+        self.widgets.btn_restart.pack(side=tk.LEFT, padx=5)
 
         self.widgets.btn_settings = ttk.Button(ctrl_frame, text="⚙️ Settings", command=app.open_settings)
         self.widgets.btn_settings.pack(side=tk.LEFT, padx=5)
