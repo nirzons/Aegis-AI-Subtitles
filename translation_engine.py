@@ -132,11 +132,25 @@ class TranslationEngine:
             # Calculate dynamic serial indexes based on the project sysprm context
             import re
             last_idx = 0
+            illegal_labels = [] # List of names that should be purged if found with colons
             if series_context:
                 matches = re.findall(r'###\s*(\d+)\.', series_context)
                 if matches:
                     last_idx = max([int(m) for m in matches])
+                
+                # Extract potential speaker names from the gender tracking lists for the auditor
+                # Searches for words in parentheses or capitalize English names
+                name_matches = re.findall(r'([A-Z][a-z]+|\([\u0590-\u05FF]+\))', series_context)
+                for nm in name_matches:
+                    clean_nm = nm.strip("()")
+                    if len(clean_nm) > 2 and clean_nm not in illegal_labels:
+                        illegal_labels.append(clean_nm)
+                # Add common technical labels
+                if "Jeff" not in illegal_labels: illegal_labels.append("Jeff")
+                if "Probst" not in illegal_labels: illegal_labels.append("Probst")
+                if "ג'ף" not in illegal_labels: illegal_labels.append("ג'ף")
             
+            self.illegal_labels = illegal_labels # Store as instance variable
             idx_workflow = last_idx + 1
             idx_tech = idx_workflow + 1
             idx_clean = idx_tech + 1
@@ -272,7 +286,13 @@ class TranslationEngine:
             session_processed = 0
             success_streak = 0
 
-            log(self.log_queue, session_log_file, f"\n🚀 Starting Protected AI Translation with {model_cfg['name']}")
+            # Initial GUI priming
+            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+            if self.shared_state:
+                from app_utils import format_cost_display
+                self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
+
+            log(self.log_queue, session_log_file, f"🚀 Starting Protected AI Translation with {model_cfg['provider']}")
             
             if resume_mode:
                 if override_msg:
@@ -369,7 +389,7 @@ class TranslationEngine:
                         for idx, txt in input_payload.items():
                             # If line is only SDH tags + punctuation, force empty string
                             if re.fullmatch(r"[-.\s]*[\[(].*?[\])][-.\s]*", txt):
-                                input_payload[idx] = "" 
+                                input_payload[idx] = ""
 
                         # --- Italic Passthrough: Pre-Processing ---
                         # We identify subtitles entirely wrapped in <i>...</i>
@@ -434,9 +454,32 @@ class TranslationEngine:
                         if has_tags:
                             tag_rule = "4. תגיות עיצוב (Formatting Tags): שמור על תגיות כמו <i> או <font color=\"...\"> בדיוק במיקומן המקורי. אל תתרגם מילים טכניות (כמו 'color') ואל תמחק אותן. **חשוב: מותר (ואף חובה) להוסיף ירידת שורה `\\n` בתוך תגיות (למשל `<i>טקסט...\\n...טקסט</i>`) כדי לשמור על חוק 8 המילים לשורה.** וודא שערכי צבע מוקפים במירכאות.\n"
 
+                        # --- PROMPT INJECTION: Pre-emptive Support ---
+                        # We scan the SOURCE text to see if there are tricky spots (Names, SDH)
+                        # and warn the translator in advance.
+                        import importlib
+                        import text_processing
+                        importlib.reload(text_processing)
+                        pre_warnings = text_processing.pre_audit_source(input_payload, illegal_labels=self.illegal_labels)
+                        
+                        warning_section = ""
+                        if pre_warnings:
+                            # Build the surgical instruction for the LLM
+                            warning_list = [f"אינדקס {idx}: {msg}" for idx, msg in pre_warnings]
+                            warning_section = f"\n### דגשים מיוחדים לבאץ' הזה (באחריותך!) ###\n" + "\n".join([f"• {w}" for w in warning_list]) + "\n"
+                            
+                            # Conditional Logging to terminal
+                            flagged_indices = sorted(list(set(str(idx) for idx, msg in pre_warnings)), key=lambda x: int(x) if x.isdigit() else 0)
+                            if getattr(self, 'debug_mode', False):
+                                log(self.log_queue, session_log_file, f"🔍 Forensic Scout: Detailed analysis for indices {flagged_indices}.")
+                                for idx, msg in pre_warnings:
+                                    log(self.log_queue, session_log_file, f"   ↳ אינדקס {idx}: {msg}")
+                            else:
+                                log(self.log_queue, session_log_file, f"🔍 Forensic Scout: Targets flagged at indices {flagged_indices}.")
+
                         user_prompt = f"""
 אתה מתרגם עכשיו את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.
-
+{warning_section}
 {context_section}
 
 {text_chunk}
@@ -510,7 +553,14 @@ class TranslationEngine:
                                     file_log(session_log_file, f"STRUCTURED OUTPUT SCHEMA:\n{schema_dump}\n")
 
                                     
-                                file_log(session_log_file, f"RAW LLM RESPONSE:\n{raw_res.strip()}\n{'-'*38}\n")
+                                # Pretty-print JSON for logs if possible
+                                try:
+                                    from text_processing import pre_repair_json
+                                    pretty_res = json.dumps(json.loads(pre_repair_json(raw_res)), indent=4, ensure_ascii=False)
+                                except:
+                                    pretty_res = raw_res.strip()
+
+                                file_log(session_log_file, f"RAW LLM RESPONSE:\n{pretty_res}\n{'-'*38}\n")
 
                                 batch_diagnostics_logged = True
 
@@ -528,7 +578,11 @@ class TranslationEngine:
                             discount = model_cfg.get('cache_discount', 0.0)
                             hit_pct = 0  # default; overwritten below when cache discount is active
 
-                            if discount > 0 and in_tokens > 0:
+                            if model_cfg.get('provider') == 'lmstudio':
+                                # Local models cost = raw tokens
+                                batch_cost = in_tokens + out_tokens
+                                hit_str = ""
+                            elif discount > 0 and in_tokens > 0:
                                 miss_tokens = in_tokens - cached_tokens
                                 # Calculate discounted price based on the percentage provided in settings
                                 cache_hit_price = model_cfg['input_price'] * (1 - (discount / 100.0))
@@ -550,9 +604,13 @@ class TranslationEngine:
                             
                             # Immediate GUI update
                             self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+                            if self.shared_state:
+                                from app_utils import format_cost_display
+                                self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
                             
-                            # Immediate Terminal logging
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
+
+                            # Immediate Terminal logging
                             log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}{brain_str}) | Total Main: {fmt_val(total_main_cost)}")
 
                             cleaned_res = pre_repair_json(raw_res)
@@ -770,7 +828,10 @@ class TranslationEngine:
                                 
                                 # JUDGE Cost Calculation
                                 j_discount = judge_cfg.get('cache_discount', 0.0)
-                                if j_discount > 0 and j_in > 0:
+                                if judge_cfg.get('provider') == 'lmstudio':
+                                    j_cost = j_in + j_out
+                                    j_hit_str = ""
+                                elif j_discount > 0 and j_in > 0:
                                     j_miss = j_in - j_cached
                                     j_hit_price = judge_cfg['input_price'] * (1 - (j_discount / 100.0))
                                     j_cost = (j_miss / 1e6 * judge_cfg['input_price']) + (j_cached / 1e6 * j_hit_price) + (j_out / 1e6 * judge_cfg['output_price'])
@@ -787,10 +848,13 @@ class TranslationEngine:
                                 
                                 # Immediate GUI update
                                 self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+                                if self.shared_state:
+                                    from app_utils import format_cost_display
+                                    self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
                                 
                                 # Immediate Terminal logging
                                 log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}{j_brain_str}) | Total Judge: {fmt_val(total_judge_cost)}")
-                                file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,}{j_brain_str} | Total Judge Cost: ${total_judge_cost:.5f}")
+                                file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,}{j_brain_str} | Total Judge: {fmt_val(total_judge_cost)}")
 
                                 if not is_valid:
                                     if judge_reason == "FAILED":

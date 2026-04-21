@@ -376,7 +376,42 @@ def force_split_overlong_line(text):
     split_token_idx = word_indices[mid_point - 1]
     
     # Reassemble tokens with a newline at the selected boundary
+    # Reassemble tokens with a newline at the selected boundary
     part1 = " ".join(tokens[:split_token_idx + 1])
     part2 = " ".join(tokens[split_token_idx + 1:])
     
     return f"{part1}\n{part2}"
+
+def pre_audit_source(eng_dict, illegal_labels=None):
+    """
+    Scans English source text for potential translation pitfalls (SDH, names) 
+    BEFORE sending to the LLM. Returns a list of (index, message) tuples.
+    """
+    if illegal_labels is None:
+        illegal_labels = []
+        
+    warnings = []
+    
+    for idx, txt in eng_dict.items():
+        if not txt: continue
+        
+        # 1. Look for Speaker Names (e.g., JEFF:, ROCKSROY:)
+        speaker_match = re.search(r'(?m)^(?:\s*-\s*)?([^:\n]{1,15}):', txt)
+        if speaker_match:
+            found_name = speaker_match.group(1).strip()
+            msg = f"חשד לשם דובר ('{found_name}:'). מחק את השם, אך וודא שהדיאלוג המדובר עדיין מתורגם!"
+            warnings.append((idx, msg))
+            
+        # 2. Look for SDH tags in brackets (e.g., [music], (coughs))
+        sdh_match = re.search(r'[\[(].*?[\])]', txt)
+        if sdh_match:
+            content = sdh_match.group(0)
+            msg = f"חשד לתיאור צליל/SDH ({content}). אם מדובר בתיאור סאונד, מחק אותו אך תרגם כל דיאלוג אחר המופיע בשורה."
+            warnings.append((idx, msg))
+
+        # 3. Look for Music symbols
+        if "♪" in txt:
+            msg = "נמצא סמל מוזיקה ♪. מחק אותו מהתרגום."
+            warnings.append((idx, msg))
+            
+    return warnings

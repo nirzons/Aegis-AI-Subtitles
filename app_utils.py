@@ -35,9 +35,10 @@ def format_cost_display(main_cost, judge_cost):
         return f"${val:.4f}"
     
     main_str = format_single(main_cost)
+    label = "Tokens" if main_cost > 100 else "Cost"
     if judge_cost > 0:
         return f"M: {main_str} | J: {format_single(judge_cost)}"
-    return f"Cost: {main_str}"
+    return f"{label}: {main_str}"
 
 def get_eta_string(elapsed_time, session_processed, processed, total_blocks):
     """Calculates and formats the ETA string."""

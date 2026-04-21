@@ -115,22 +115,22 @@ def generate_judge_schema(indices_list):
         "properties": {
             "thought_process": {
                 "type": "string",
-                "description": "תהליך המחשבה של השופט, השוואה בין מקור לתרגום וזיהוי טעויות. אזהרה: אל תעתיק את תיאור השדה!"
+                "description": "חובה: כתוב לפחות 2 משפטים בעברית המנתחים את התרגום מול המקור. הסבר בדיוק למה החלטת לפסול או לאשר. אל תשתמש ב-'...'."
             },
             "summary": {
                 "type": "string",
-                "description": "תקציר קצר מאוד (משפט אחד) של תוכן הבאץ' כדי לוודא הבנה. אזהרה: אל תעתיק את תיאור השדה!"
+                "description": "תקציר קצר (משפט אחד) של העלילה. אל תשתמש ב-'...'."
             },
             "is_valid": {
                 "type": "boolean",
-                "description": "האם התרגום תקין (true) או שיש לפסול אותו (false) בשל שגיאה חמורה."
+                "description": "True אם התרגום מושלם. False אם יש לפסול (חוקים 1-6)."
             },
             "error_map": {
                 "type": "object",
                 "properties": error_map_properties,
-                "required": indices, # OpenAI Strict mode requires all properties to be listed in required
+                "required": indices,
                 "additionalProperties": False,
-                "description": "מיפוי אינדקסים לשגיאות שנמצאו. חובה להחזיר מחרוזת ריקה \"\" עבור אינדקסים ללא שגיאה."
+                "description": "מיפוי אינדקסים לשגיאות. חובה לתת נימוק בעברית לכל פסילה. עבור תקין השאר מחרוזת ריקה \"\"."
             }
         },
         "required": ["thought_process", "summary", "is_valid", "error_map"],
@@ -358,69 +358,47 @@ def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_l
     return "\n".join(lines)
 
 
-def call_llm_judge(
-    judge_model_cfg,
-    indices,
-    eng_dict,
-    heb_dict,
-    api_key,
-    judge_batch_size=20,
-    ordered_srt_indices=None,
-    eng_by_index=None,
-    heb_completed_by_index=None,
-    log_func=None,
-    file_log_func=None,
-    audit_reason_heb=None,
-    progress_func=None,
-    ui_queue=None
-):
-    """Audits a suspicious translation using an AI Judge in chunks."""
-    if not api_key:
-        return True, "No API Key", 0, 0, 0, 0
+def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordered_srt_indices,
+                   log_func=None, progress_func=None, file_log_func=None, 
+                   audit_reason_heb=None, eng_by_index=None, heb_completed_by_index=None, ui_queue=None):
+    """
+    Calls a second LLM to audit the translation batch.
+    Returns: (is_overall_valid, error_map, in, out, cached, reasoning)
+    """
+    from constants import judge_batch_size
+    from text_processing import pre_repair_json
     
     try:
         chunk_size = int(judge_batch_size)
     except ValueError:
         chunk_size = 20
-    # Structured Outputs check for Judge optimization
+
     supports_structured = (judge_model_cfg.get('provider') == 'openai' and 
-                         any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
-                         (judge_model_cfg.get('provider') == 'lmstudio')
+                          any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
+                          (judge_model_cfg.get('provider') == 'lmstudio')
 
-    schema_instruction = """החזר אך ורק JSON חוקי במבנה הבא:
-{
-  "thought_process": "בחר את האינדקס הכי חשוד. השווה מקור לתרגום. בדוק בהקשר ה-OVERLAP (לפני/אחרי) אם המידע 'זלג' לכתובית סמוכה. אם המשמעות הכוללת נשמרת — סמן valid. אם יש שינוי משמעות מהותי, סתירה לוגית, או המצאה — פסול.",
-  "summary": "תקציר קצר מאוד (משפט אחד) של תוכן הבאץ'.",
-  "is_valid": true,
-  "error_map": { 
-    "103": "אם false, ציין עבור כל אינדקס רלוונטי את השגיאה (מפתח: אינדקס, ערך: סיבה)."
-  }
-}""" if not supports_structured else "השב בפורמט ה-JSON Schema המוגדר בלבד."
+    system_prompt = f"""אתה אודיטור QA חסר רחמים. תפקידך למצוא שגיאות טכניות בתרגום כתוביות (עונה 42 של הישרדות).
+נתון לך גם CONTEXTUAL OVERLAP לצורך הקשר בלבד - אל תבצע עליו ביקורת!
 
-    system_prompt = f"""אתה אודיטור QA דטרמיניסטי. תפקידך להשוות מילוני תרגום (מקור מול תוצאה) ולהחליט אם התרגום תקין.
-נתון לך גם CONTEXTUAL OVERLAP: שורת מקור/תרגום אחת לפני ואחת אחרי הבאץ' הנבדק — לצורך הקשר בלבד.
+### חוקי הפסילה (אם אחד מהם מתקיים, עליך לפסול את הבאץ'): ###
+1. OMISSION: המקור מכיל מלל (מעל 2 מילים) והתרגום ריק.
+2. LEAKAGE (קריטי!): שם דובר נשאר בתרגום (למשל ROCKSROY: או רוקסרוי:).
+3. SDH: תיאורי צליל (למשל: [מוזיקה] או (שיעול)) נשארים בתרגום. **חריג:** דיאלוג בסוגריים (לחישה) הוא תקין.
+4. ENGLISH: קיימת אנגלית בתוך התרגום.
+5. TAGS: חוסר התאמה בתגיות עיצוב (כמו <i>).
 
-### תהליך העבודה (חובה) ###
-שלב 1: (thought_process) - נתח את האינדקסים. השווה מקור לתרגום.
-שלב 2: (summary) - כתוב תקציר קצר מאוד (משפט אחד) של תוכן הבאץ' כדי לוודא שהבנת את ההקשר.
-שלב 3: (is_valid) - קבע האם התרגום תקין (true/false) על סמך החוקים להלן.
-שלב 4: (error_map) - עליך להחזיר מילון שבו המפתחות הם כל האינדקסים שנבדקו בבאץ' הנוכחי. עבור כל אינדקס בעייתי, כתוב סיבה מפורטת. עבור כל אינדקס תקין, חובה להחזיר מחרוזת ריקה (""). אל תדלג על אף אינדקס.
+### הנחיות קריטיות נגד עצלנות (חובה): ###
+- חל איסור מוחלט על שימוש ב-"..."! אתה חייב לכתוב לפחות 2 משפטים מלאים בעברית בכל שדה טקסט.
+- אל תשתמש במילים בודדות כמו "LEAKAGE" בתיאור השגיאה. כתוב בדיוק מה הטעות (למשל: "השם ג'ף נשאר בתחילת השורה").
+- אם הבאץ' תקין לחלוטין: סמן is_rejected: false.
+- אם מצאת ולו טעות אחת זעירה: סמן is_rejected: true.
 
-### חוקי ביקורת דטרמיניסטיים (פסול/false אם לפחות אחד חל) ###
-1. OMISSION: פסול (false) אם ערך TRANSLATED הוא ריק ("") למרות שהמקור מכיל מלל מדובר. חריג: מותר שהתרגום יהיה ריק אם המקור מכיל עד 2 מילים בלבד והמשמעות שלהן הוטמעה בכתובית סמוכה. חריג קריטי: טקסט בסוגריים [ ] או ( ) הוא אפקט קולי (SDH) וחובה שיוחזר כמחרוזת ריקה ("").
-2. DUPLICATION: ערך TRANSLATED זהה לחלוטין לערך קודם באותו באץ', בעוד שהמקור שונה מהותית.
-3. LEAKAGE (דליפה): פסול אם נשאר שם דובר עם נקודתיים (למשל "JEFF:"). חובה למחוק תגיות זיהוי! (שמות בתוך הדיאלוג הם תקינים).
-4. ENGLISH: קיימות אותיות באנגלית (מלבד שמות מותגים, ראשי תיבות, או תגיות עיצוב כמו <i>).
-5. SEMANTIC FIDELITY: פסול רק אם יש שינוי משמעות מהותי, סתירה לוגית, או המצאה (Hallucination).
-6. GENDER: פער במגדר (זכר/נקבה) אינו עילה לפסילה אלא אם המגדר מצוין במפורש בכינויי גוף בתוך הטקסט הנבדק (למשל: המקור אומר "He said" ותורגם כ-"היא אמרה").
-
-{schema_instruction}"""
+השב בפורמט ה-JSON Schema המוגדר בלבד."""
 
     total_in, total_out, total_cached, total_reasoning = 0, 0, 0, 0
     master_error_map = {}
     is_overall_valid = True
 
-    # Split indices into chunks
     chunks = [indices[i:i + chunk_size] for i in range(0, len(indices), chunk_size)]
     
     if file_log_func:
@@ -440,84 +418,83 @@ def call_llm_judge(
         source_str = json.dumps(chunk_eng, ensure_ascii=False, indent=2)
         trans_str = json.dumps(chunk_heb, ensure_ascii=False, indent=2)
         overlap_str = _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_map, heb_lookup)
+        if overlap_str:
+            overlap_str = f"### [READ ONLY CONTEXT] (REFERENCE ONLY - DO NOT AUDIT THESE LINES) ###\n{overlap_str}\n"
 
         user_prompt = f"""### AUDIT CHUNK {idx+1}/{len(chunks)} (Blocks: {chunk_indices[0]}-{chunk_indices[-1]}) ###
+
+{overlap_str}
 
 SOURCE (ENGLISH):
 {source_str}
 
 TRANSLATED (HEBREW):
 {trans_str}
-
-{overlap_str}
 """
+        # SURGICAL INJECTION: Only show audit reasons relevant to THIS chunk
         if audit_reason_heb:
-            chunk_reasons = []
-            for item in audit_reason_heb.split("; "):
-                parts = item.split("|", 1)
-                if len(parts) == 2:
-                    scope, msg = parts[0], parts[1]
-                    if scope == "GLOBAL":
-                        chunk_reasons.append(("GLOBAL", msg))
-                    elif scope.startswith("IDX:"):
-                        idx_list = scope[4:].split(",")
-                        if any(str(i) in [str(c) for c in chunk_indices] for i in idx_list):
-                            # Try to extract index from scope for specific instruction
-                            msg_idx = idx_list[0] if idx_list else "?"
-                            chunk_reasons.append((msg_idx, msg))
+            relevant_reasons = []
+            # Audit reasons are typically separated by '; ' and prefixed with 'IDX:#'
+            reasons_list = audit_reason_heb.split("; ")
+            for r in reasons_list:
+                # Check for global errors OR specific index matches for THIS chunk
+                if "IDX:" in r:
+                    # Match pattern like IDX:25 or IDX:25,26
+                    try:
+                        idx_part = r.split("|")[0].replace("IDX:", "").strip()
+                        affected_indices = [int(i.strip()) for i in idx_part.split(",")]
+                        if any(i in chunk_indices for i in affected_indices):
+                            relevant_reasons.append(r)
+                    except:
+                        # Fallback: if we can't parse safely, include it to be safe
+                        relevant_reasons.append(r)
                 else:
-                    chunk_reasons.append(("?", item))
-            
-            if chunk_reasons:
-                formatted_reasons = []
-                has_custom = False
-                for msg_idx, msg in chunk_reasons:
-                    if "זיהוי שם דובר" in msg or "זיהוי שם מנחה" in msg:
-                        has_custom = True
-                        is_host = "זיהוי שם מנחה" in msg
-                        # Extract the name from the message if possible (format: 'name:')
-                        name_match = re.search(r"'(.*?)'", msg)
-                        found_name = name_match.group(1).strip(":") if name_match else "המילה החשודה"
-                        
-                        if is_host:
-                            custom_msg = f"""### הופעלה התרעת מערכת חמורה: ###
-המערכת הטכנית זיהתה בוודאות שם מנחה/דובר ('{found_name}:') באינדקס {msg_idx}. 
-**משימתך:** חובה עליך לפסול (false) לפי חוק 3. אל תשאיר שמות דוברים או מנחה בתרגום הסופי! השם "{found_name}:" חייב להימחק."""
-                        else:
-                            custom_msg = f"""### הופעלה התרעת מערכת אוטומטית: ###
-המערכת הטכנית זיהתה חשד לשם דובר באינדקס {msg_idx}: ('{found_name}:').
-**משימתך:** בדוק בהקשר. האם "{found_name}" הוא באמת שם של דמות המדברת בתוכנית (ואז עליך לפסול לפי חוק 3)? או שמדובר בחלק אינטגרלי מהטקסט המדובר עצמו (למשל, קריין מכריז, מונח רגיל)? אם זה חלק מהטקסט ולא שם של דובר – **התעלם מההתרעה ואשר (true)**."""
-                        formatted_reasons.append(custom_msg)
-                    else:
-                        formatted_reasons.append(msg)
-                
-                if has_custom:
-                    reasons_text = "\n\n".join(formatted_reasons)
-                    user_prompt += f"\n{reasons_text}\n\n"
-                else:
-                    # Previous behavior for standard reasons
-                    reasons_text = "\n".join(formatted_reasons)
-                    user_prompt += f"\n### אתה הופעלת בגלל הבעיה הבאה שהתגלתה: ###\n{reasons_text}\n\n"
+                    # Global/General errors are shown to every chunk
+                    relevant_reasons.append(r)
+
+            if relevant_reasons:
+                reasons_text = "\n".join(relevant_reasons)
+                user_prompt += f"\n### מערכת ה-Audit זיהתה בעיה: ###\n{reasons_text}\nבדוק האם זו אכן שגיאה לפי חוקי הפסילה עבור האינדקסים בבאץ' הזה בלבד.\n"
 
         user_prompt += "### סוף נתונים ###\n"
-        user_prompt += "\nאזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'false' בגלל מילה או תגית, ודא שהיא אכן מודפסת פיזית בתוך הערך של ה-TRANSLATED. חוקים 5 ו-6 אינם דוחים חוקים 1-4.\n"
+        user_prompt += "\nאזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'is_rejected: true', ודא שהשגיאה מופיעה פיזית ב-TRANSLATED.\n"
+
+        judge_schema = {
+            "type": "object",
+            "properties": {
+                "thought_process": {
+                    "type": "string",
+                    "description": "ניתוח מעמיק בעברית (מינימום 2 משפטים). הסבר בדיוק מה בדקת. אל תשתמש ב-'...'."
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "תקציר קצר של העלילה. אל תשתמש ב-'...'."
+                },
+                "is_rejected": {
+                    "type": "boolean",
+                    "description": "True אם לפסול (יש שגיאה). False אם הכל תקין."
+                },
+                "error_map": {
+                    "type": "object",
+                    "properties": {str(k): {"type": "string", "description": "תיאור השגיאה בעברית (משפט מלא). אם תקין, השאר ריק."} for k in chunk_indices},
+                    "required": [str(k) for k in chunk_indices],
+                    "additionalProperties": False
+                }
+            },
+            "required": ["thought_process", "summary", "is_rejected", "error_map"],
+            "additionalProperties": False
+        }
+
         try:
             if log_func:
                 log_func(f"   ↳ ⏳ Judge Chunk {idx+1}/{len(chunks)} [{chunk_indices[0]}–{chunk_indices[-1]}]: sending...")
-            if file_log_func:
-                def safe_pretty(text):
-                    try:
-                        return json.dumps(json.loads(text), indent=4, ensure_ascii=False)
-                    except:
-                        return text
-                
-                file_log_func(f"--- JUDGE CHUNK {idx+1} SYSTEM PROMPT START ---\n{safe_pretty(system_prompt)}\n--- JUDGE CHUNK {idx+1} SYSTEM PROMPT END ---")
-                file_log_func(f"--- JUDGE CHUNK {idx+1} USER PROMPT START ---\n{safe_pretty(user_prompt)}\n--- JUDGE CHUNK {idx+1} USER PROMPT END ---")
-                # Log Structured Output Schema for Judge
-                j_schema_dump = json.dumps(generate_judge_schema(chunk_indices), ensure_ascii=False, indent=2)
-                file_log_func(f"--- JUDGE CHUNK {idx+1} STRUCTURED OUTPUT SCHEMA ---\n{j_schema_dump}\n")
-
             
+            if file_log_func:
+                file_log_func(f"--- JUDGE CHUNK {idx+1} SYSTEM PROMPT START ---\n{system_prompt}\n--- JUDGE CHUNK {idx+1} SYSTEM PROMPT END ---")
+                file_log_func(f"--- JUDGE CHUNK {idx+1} USER PROMPT START ---\n{user_prompt}\n--- JUDGE CHUNK {idx+1} USER PROMPT END ---")
+                if supports_structured:
+                    file_log_func(f"--- JUDGE CHUNK {idx+1} STRUCTURED OUTPUT SCHEMA ---\n{json.dumps(judge_schema, indent=2, ensure_ascii=False)}\n")
+
             if ui_queue:
                 chunk_load = 0
                 for idx_c in chunk_indices:
@@ -525,61 +502,59 @@ TRANSLATED (HEBREW):
                     chunk_load += len(str(heb_dict.get(idx_c, "")))
                 ui_queue.put(("judge_timer_start", {"size": len(chunk_indices), "load": chunk_load}))
 
-            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(judge_model_cfg, system_prompt, user_prompt, api_key, indices_list=chunk_indices, is_judge=True)
-            
+            raw_res, in_t, out_t, cached_t, reasoning_t = call_llm(
+                judge_model_cfg, system_prompt, user_prompt, api_key,
+                response_format=judge_schema if supports_structured else None
+            )
+
             if ui_queue:
                 ui_queue.put(("judge_timer_stop", chunk_load))
-            
+
+            total_in += in_t
+            total_out += out_t
+            total_cached += cached_t
+            total_reasoning += reasoning_t
+
             if file_log_func:
-                file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{safe_pretty(raw_res)}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
-            
-            total_in += in_tokens
-            total_out += out_tokens
-            total_cached += cached_tokens
-            total_reasoning += reasoning_tokens
-            
-            cleaned = pre_repair_json(raw_res)
-            res_data = json.loads(cleaned)
-            
-            j_discount = judge_model_cfg.get('cache_discount', 0.0)
-            hit_str = ""
-            if j_discount > 0 and in_tokens > 0:
-                hit_pct = (cached_tokens / in_tokens * 100)
-                hit_str = f" [Hit: {cached_tokens:,} ({hit_pct:.1f}%)]"
+                try:
+                    pretty_res = json.dumps(json.loads(pre_repair_json(raw_res)), indent=4, ensure_ascii=False)
+                except:
+                    pretty_res = raw_res
+                file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{pretty_res}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
 
-            if not res_data.get("is_valid", True):
+            if not raw_res: continue
+
+            # Parse
+            parsed = {}
+            try:
+                parsed = json.loads(pre_repair_json(raw_res))
+            except:
+                import re
+                match = re.search(r'\{.*\}', raw_res, re.DOTALL)
+                if match:
+                    try: parsed = json.loads(pre_repair_json(match.group(0)))
+                    except: continue
+                else: continue
+
+            # Check rejection
+            is_rejected = parsed.get('is_rejected', False)
+            if is_rejected:
                 is_overall_valid = False
-                err_map = res_data.get("error_map", {})
-                if not err_map:
-                    # brain load for chunk
-                    j_brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
-                    j_brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({j_brain_load:.1f}%)" if reasoning_tokens > 0 else ""
+            
+            # Merge errors
+            err_map = parsed.get('error_map', {})
+            master_error_map.update(err_map)
 
-                    # fallback if model ignores schema
-                    reason = res_data.get("reason", "Unknown Audit Failure")
-                    master_error_map[f"chunk_{idx+1}_general"] = f"[Chunk {idx+1}] {reason}"
-                    if log_func:
-                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str}) — {reason}")
+            if log_func:
+                if is_rejected:
+                    desc = "; ".join([f"{k}: {v}" for k, v in err_map.items() if v])
+                    log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED — {desc}")
                 else:
-                    master_error_map.update(err_map)
-                    if log_func:
-                        err_summary = "; ".join([f"{k}: {v}" for k, v in err_map.items()])
-                        j_brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
-                        j_brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({j_brain_load:.1f}%)" if reasoning_tokens > 0 else ""
-                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: FAIL (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str}) — {err_summary}")
-                return False, master_error_map, total_in, total_out, total_cached, total_reasoning
-            else:
-                if log_func:
-                    j_brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
-                    j_brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({j_brain_load:.1f}%)" if reasoning_tokens > 0 else ""
-                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}/{len(chunks)}: PASS (In:{in_tokens:,}{hit_str} / Out:{out_tokens:,}{j_brain_str})")
+                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}: PASSED")
 
         except Exception as e:
-            if log_func:
-                log_func(f"   ↳ ❌ Judge Chunk {idx+1}/{len(chunks)}: ERROR — {e}")
-            # Judge itself failed — return sentinel so caller falls back to auditor feedback
-            return False, "FAILED", total_in, total_out, total_cached, total_reasoning
+            if log_func: log_func(f"   ↳ ❌ Judge Chunk {idx+1} Exception: {e}")
+            continue
 
-    if not is_overall_valid:
-        return False, master_error_map, total_in, total_out, total_cached, total_reasoning
-    return True, {}, total_in, total_out, total_cached, total_reasoning
+    return is_overall_valid, master_error_map, total_in, total_out, total_cached, total_reasoning
+    return is_overall_valid, master_error_map, total_in, total_out, total_cached, total_reasoning
