@@ -24,10 +24,12 @@ A unified abstraction layer for multiple providers:
 -   **OpenAI (GPT-5/o1)**: Implements the `developer` role to isolate instructions from subtitles, ensuring high cache hit ratios and stable reasoning.
 - **Local LLMs**: Standardized OpenAI-compatible interface for LM Studio with **API-level Strict Mode** (response_format) enabled. The engine programmatically synchronizes the `properties` and `required` arrays, applying automatic deduplication (`list(dict.fromkeys())`) to ensure schema compliance and prevent `400 Bad Request` errors caused by overlapping keys.
 
-### 4. Heuristic & AI Auditing (`text_processing.py`)
-A two-tier validation system:
-1.  **Heuristic Auditor**: Checks for strict length limits (9 words/14 words), English leakage, and illegal speaker names. It uses **Hyper-Specific Extraction** to identify exactly which words or labels caused the failure, injecting these specifics back into the retry prompt to break model stubbornness.
-2.  **AI Judge**: A high-reasoning semantic auditor that checks for nuanced errors like omissions, gender-flips (when pronouns are present), and naturalness.
+### 4. Heuristic & AI Auditing (`text_processing.py` & `llm_api.py`)
+A multi-tier validation system prioritizing minimal token usage and localized reasoning:
+1.  **Heuristic Auditor (Forensic Scout)**: Checks for strict length limits, English leakage (SDH), and illegal speaker names. It uses **Hyper-Specific Extraction** to identify exactly which strings caused the failure. 
+2.  **Surgical Prompt Injection**: The engine routes the exact string failures caught by the Heuristic Auditor directly into the AI Judge's prompt for the specific chunk where the error occurred, heavily anchoring the LLM and preventing False Negatives.
+3.  **Localized AI Judge**: A semantic auditor checking for nuanced errors like omissions and tags. It is structurally decoupled from English anchors, enforcing a pure Hebrew reasoning space (`thought_process`, `summary`, `error_map`) to prevent schema inertia and language hallucination in natively-trained models.
+4.  **Short-Circuit Auditing**: Evaluates chunks sequentially. The moment the Judge flags a chunk as rejected, the pipeline instantly aborts testing the remaining chunks, significantly saving latency and compute costs.
 
 ### 5. Settings & Config (`settings.py` & `constants.py`)
 Manages persistent state across sessions. Supports dynamic model pricing and **Cache Discount** calculation, allowing the system to accurately track costs even as API providers change their pricing structures.
