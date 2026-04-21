@@ -40,6 +40,11 @@ A high-fidelity, read-only monitoring layer built on **FastAPI** and **WebSocket
 - **Batch Size Arrow**: The JS frontend tracks actual batch size changes client-side (mirroring Tkinter's `lbl_status` arrow logic) and persists the ↑/↓ indicator until the next genuine size change.
 - **Responsive Layout**: Desktop browsers show Terminal Logs and Live Intercept Feed side-by-side (`md:flex-row`); mobile stacks them vertically. All telemetry remains visible on both form factors.
 
+### 7. Engine Performance & Resource Optimization
+To support high-frequency, CPU-intensive substring matching across thousands of segments:
+- **Pre-Compiled Regex Maps**: All deterministic patterns (e.g., RTL escape markers, SDH filters, string sanitation loops) are pre-compiled as module-level constants.
+- **Micro-Delegation**: The monolithic `run_translation` mainloop delegates heavy processing (e.g., recursive JSON structure recovery during hallucinations, discount token computation) to private class helper methods (`_recover_schema`, `_calculate_costs`), dramatically reducing variable allocation overhead and improving trace readability.
+
 ---
 
 ## 🚀 Diagnostics & Flight Control

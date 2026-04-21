@@ -3,6 +3,13 @@ import time
 import datetime
 import json
 import re
+
+RE_SDH_PUNCT = re.compile(r"[-.\s]*[\[(].*?[\])][-.\s]*")
+RE_GHOST_CHARS = re.compile(r'\n[a-zA-Z]{1,2}(?=\s|[א-ת]|<|♪)')
+RE_SYS_IDX = re.compile(r'###\s*(\d+)\.')
+RE_NAME_LABELS = re.compile(r'([A-Z][a-z]+|\([\u0590-\u05FF]+\))')
+RE_NEWLINE_CLEANUP = re.compile(r'\s*\\+[nננ]\s*')
+
 import threading
 from constants import (
     STEP_HEADER, STEP_READ_CONTEXT, STEP_CONTINUOUS_DRAFT, STEP_MAPPING_PLAN, 
@@ -28,6 +35,114 @@ class TranslationEngine:
 
     def request_stop(self):
         self.should_stop = True
+
+    def _calculate_costs(self, tokens_in, tokens_out, tokens_cached, tokens_reasoning, cfg):
+        """
+        Calculates the financial cost of a single API interaction, factoring in:
+        1. Context caching discounts (if using deepseek or supported endpoints).
+        2. Hardware tokens tracking vs. Local model zero-costs.
+        3. Reasoning load percentages for GPT-5/o1/Thinker models.
+        """
+        discount = cfg.get('cache_discount', 0.0)
+        hit_pct = 0
+
+        # Local providers (lmstudio) don't incur financial cost, so we just track token volume
+        if cfg.get('provider') == 'lmstudio':
+            cost = tokens_in + tokens_out
+            hit_str = ""
+        elif discount > 0 and tokens_in > 0:
+            miss_tokens = tokens_in - tokens_cached
+            # Calculate cost considering the discounted cache-hit price
+            cache_hit_price = cfg['input_price'] * (1 - (discount / 100.0))
+            cost = (miss_tokens / 1e6 * cfg['input_price']) + (tokens_cached / 1e6 * cache_hit_price) + (tokens_out / 1e6 * cfg['output_price'])
+            hit_pct = (tokens_cached/tokens_in*100)
+            hit_str = f" [Hit: {tokens_cached:,} ({hit_pct:.1f}%)]"
+        else:
+            # Standard API pricing without caching discount
+            cost = (tokens_in / 1e6 * cfg['input_price']) + (tokens_out / 1e6 * cfg['output_price'])
+            hit_str = ""
+
+        # Measure 'Brain Load' - How much token overhead the model spent specifically on Reasoning vs Generation
+        brain_load = (tokens_reasoning / tokens_out * 100) if tokens_out > 0 else 0
+        brain_str = f" | 🧠 Brain: {tokens_reasoning:,} ({brain_load:.1f}%)" if tokens_reasoning > 0 else ""
+        
+        return cost, hit_str, hit_pct, brain_str
+
+    def _recover_schema(self, res_json, stats, session_log_file):
+        """
+        Attempts to gracefully recover the required output structure when LLMs hallucinate JSON keys.
+        Particularly necessary for high-temperature models or deeply analytical GPT-5 models that 
+        sometimes ignore the strict envelope keys and wrap the indices in custom objects.
+        """
+        recovered = False
+        if 'translated_srt' not in res_json:
+            # Fallback 1: Common hallucinated root keys
+            possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
+            for pk in possible_keys:
+                if pk in res_json and isinstance(res_json[pk], dict):
+                    res_json['translated_srt'] = res_json[pk]
+                    recovered = True
+                    log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from hallucinated key: '{pk}'")
+                    break
+            
+            if not recovered:
+                # Fallback 2: Check if any internal dictionary happens to use numeric string keys 
+                # (which would correspond to specific subtitle indices)
+                for key, value in res_json.items():
+                    if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
+                        res_json['translated_srt'] = value
+                        recovered = True
+                        log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from inferred dictionary: '{key}'")
+                        break
+            
+            if not recovered:
+                # Fallback 3: The LLM flat-dumped the indices into the root instead of nesting them
+                if any(str(k).isdigit() for k in res_json.keys()):
+                    res_json = {'translated_srt': res_json}
+                    recovered = True
+                    log(self.log_queue, session_log_file, "   ↳ 💡 Recovered schema from root-level flat dictionary")
+
+            if recovered:
+                stats["schema_recoveries"] += 1
+
+        # If it's still missing, we trigger an explicit schema collapse which forces a retry loop
+        if 'translated_srt' not in res_json or not isinstance(res_json['translated_srt'], dict):
+            raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json.keys())}")
+
+        return res_json['translated_srt']
+
+    def _sanitize_ghost_fragments(self, received_dict, stats, session_log_file):
+        """
+        Sanitizes post-LLM artifacts, specifically:
+        1. Improperly escaped newlines (e.g. literal '\\n')
+        2. English 'Ghost Character' echoes (where the LLM accidentally prints the first letter of
+           the original English word immediately following a line break before switching back to Hebrew).
+        """
+        changes_detected = []
+        repaired_ghost_indices = []
+        for idx in received_dict:
+            original_val = str(received_dict[idx])
+            
+            # Convert raw `\\n` literals back into standard line breaks
+            cleaned_val = RE_NEWLINE_CLEANUP.sub('\n', original_val)
+            
+            # Target \n followed by 1-2 english letters, stripping out the stray English chunk
+            if RE_GHOST_CHARS.search(cleaned_val):
+                cleaned_val = RE_GHOST_CHARS.sub('\n', cleaned_val)
+                repaired_ghost_indices.append(idx)
+        
+            if cleaned_val != original_val:
+                changes_detected.append(idx)
+                received_dict[idx] = cleaned_val
+
+        # Log internal state fixes
+        if changes_detected:
+            if repaired_ghost_indices:
+                log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Removed English ghost fragments in indices: {', '.join(repaired_ghost_indices)}")
+            log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Fixed escaped line breaks or formatting in indices: {', '.join(changes_detected)}")
+            stats["sanitizer_fixes"] += 1
+            
+        return changes_detected, repaired_ghost_indices
 
     def run_translation(self, config):
         try:
@@ -130,17 +245,16 @@ class TranslationEngine:
             if not resume_mode: log(self.log_queue, session_log_file, "✅ Loaded project-specific context from sysprm.")
 
             # Calculate dynamic serial indexes based on the project sysprm context
-            import re
             last_idx = 0
             illegal_labels = [] # List of names that should be purged if found with colons
             if series_context:
-                matches = re.findall(r'###\s*(\d+)\.', series_context)
+                matches = RE_SYS_IDX.findall(series_context)
                 if matches:
                     last_idx = max([int(m) for m in matches])
                 
                 # Extract potential speaker names from the gender tracking lists for the auditor
                 # Searches for words in parentheses or capitalize English names
-                name_matches = re.findall(r'([A-Z][a-z]+|\([\u0590-\u05FF]+\))', series_context)
+                name_matches = RE_NAME_LABELS.findall(series_context)
                 for nm in name_matches:
                     clean_nm = nm.strip("()")
                     if len(clean_nm) > 2 and clean_nm not in illegal_labels:
@@ -388,7 +502,7 @@ class TranslationEngine:
                         pipeline_load = sum(len(str(v)) for v in input_payload.values())
                         for idx, txt in input_payload.items():
                             # If line is only SDH tags + punctuation, force empty string
-                            if re.fullmatch(r"[-.\s]*[\[(].*?[\])][-.\s]*", txt):
+                            if RE_SDH_PUNCT.fullmatch(txt):
                                 input_payload[idx] = ""
 
                         # --- Italic Passthrough: Pre-Processing ---
@@ -575,30 +689,11 @@ class TranslationEngine:
                             self.ui_queue.put(("timer_stop", batch_load))
                             
                             # MAIN MODEL Cost Calculation
-                            discount = model_cfg.get('cache_discount', 0.0)
-                            hit_pct = 0  # default; overwritten below when cache discount is active
-
-                            if model_cfg.get('provider') == 'lmstudio':
-                                # Local models cost = raw tokens
-                                batch_cost = in_tokens + out_tokens
-                                hit_str = ""
-                            elif discount > 0 and in_tokens > 0:
-                                miss_tokens = in_tokens - cached_tokens
-                                # Calculate discounted price based on the percentage provided in settings
-                                cache_hit_price = model_cfg['input_price'] * (1 - (discount / 100.0))
-                                batch_cost = (miss_tokens / 1e6 * model_cfg['input_price']) + (cached_tokens / 1e6 * cache_hit_price) + (out_tokens / 1e6 * model_cfg['output_price'])
-                                hit_pct = (cached_tokens/in_tokens*100)
-                                hit_str = f" [Hit: {cached_tokens:,} ({hit_pct:.1f}%)]"
-                            else:
-                                batch_cost = (in_tokens / 1e6 * model_cfg['input_price']) + (out_tokens / 1e6 * model_cfg['output_price'])
-                                hit_str = ""
+                            batch_cost, hit_str, hit_pct, brain_str = self._calculate_costs(in_tokens, out_tokens, cached_tokens, reasoning_tokens, model_cfg)
 
                             # V3 Telemetry Hook: Speed and Cache
                             if self.shared_state:
                                 self.shared_state.update_telemetry(cache_hit_percent=int(hit_pct)) 
-                            
-                            brain_load = (reasoning_tokens / out_tokens * 100) if out_tokens > 0 else 0
-                            brain_str = f" | 🧠 Brain: {reasoning_tokens:,} ({brain_load:.1f}%)" if reasoning_tokens > 0 else ""
 
                             total_main_cost += batch_cost
                             
@@ -625,40 +720,7 @@ class TranslationEngine:
                                 log(self.log_queue, session_log_file, "⚠️ AUDITOR WARNING: The LLM responded with identical placeholder text from the prompt template!")
 
                             # Schema Recovery Layer: Handle GPT-5 key hallucinations
-                            recovered = False
-                            if 'translated_srt' not in res_json:
-                                possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
-                                for pk in possible_keys:
-                                    if pk in res_json and isinstance(res_json[pk], dict):
-                                        res_json['translated_srt'] = res_json[pk]
-                                        recovered = True
-                                        log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from hallucinated key: '{pk}'")
-                                        break
-                                
-                                if not recovered:
-                                    # Search for any dictionary that contains numeric keys
-                                    for key, value in res_json.items():
-                                        if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
-                                            res_json['translated_srt'] = value
-                                            recovered = True
-                                            log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from inferred dictionary: '{key}'")
-                                            break
-                                
-                                if not recovered:
-                                    # Last ditch: Check if the ROOT object itself has numeric keys
-                                    if any(str(k).isdigit() for k in res_json.keys()):
-                                        # To avoid losing the original structure if needed, wrap it
-                                        res_json = {'translated_srt': res_json}
-                                        recovered = True
-                                        log(self.log_queue, session_log_file, "   ↳ 💡 Recovered schema from root-level flat dictionary")
-
-                                if recovered:
-                                    stats["schema_recoveries"] += 1  # track successful recovery
-
-                            if 'translated_srt' not in res_json or not isinstance(res_json['translated_srt'], dict):
-                                raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json.keys())}")
-
-                            received_dict = res_json['translated_srt']
+                            received_dict = self._recover_schema(res_json, stats, session_log_file)
 
                             # --- Italic Passthrough: Post-Processing ---
                             # Restore global italics for identified indices
@@ -673,32 +735,7 @@ class TranslationEngine:
                                 if restored_count > 0:
                                     log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Restored global italics for indices: {', '.join(sorted(batch_italic_indices))}")
 
-                            changes_detected = []
-                            repaired_ghost_indices = []
-                            for idx in received_dict:
-                                original_val = str(received_dict[idx])
-                                
-                                # 1. Standard newline cleanup
-                                cleaned_val = re.sub(r'\s*\\+[nננ]\s*', '\n', original_val)
-                                
-                                # 2. NEW: Ghost Character Sanitizer (e.g., \nt, \ns echoing original English)
-                                # This removes 1-2 english letters immediately after a newline if followed by Hebrew or whitespace
-                                ghost_pattern = r'\n[a-zA-Z]{1,2}(?=\s|[א-ת]|<|♪)'
-                                if re.search(ghost_pattern, cleaned_val):
-                                    cleaned_val = re.sub(ghost_pattern, '\n', cleaned_val)
-                                    repaired_ghost_indices.append(idx)
-                            
-                                # Check if changed
-                                if cleaned_val != original_val:
-                                    changes_detected.append(idx)
-                                    received_dict[idx] = cleaned_val
-
-                            # Logging repairs
-                            if changes_detected:
-                                if repaired_ghost_indices:
-                                    log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Removed English ghost fragments in indices: {', '.join(repaired_ghost_indices)}")
-                                log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Fixed escaped line breaks or formatting in indices: {', '.join(changes_detected)}")
-                                stats["sanitizer_fixes"] += 1
+                            changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file)
 
                             for idx in indices:
                                 if idx not in received_dict:
@@ -827,22 +864,7 @@ class TranslationEngine:
                                 # ──────────────────────────────────────────
                                 
                                 # JUDGE Cost Calculation
-                                j_discount = judge_cfg.get('cache_discount', 0.0)
-                                if judge_cfg.get('provider') == 'lmstudio':
-                                    j_cost = j_in + j_out
-                                    j_hit_str = ""
-                                elif j_discount > 0 and j_in > 0:
-                                    j_miss = j_in - j_cached
-                                    j_hit_price = judge_cfg['input_price'] * (1 - (j_discount / 100.0))
-                                    j_cost = (j_miss / 1e6 * judge_cfg['input_price']) + (j_cached / 1e6 * j_hit_price) + (j_out / 1e6 * judge_cfg['output_price'])
-                                    j_hit_pct = (j_cached / j_in * 100)
-                                    j_hit_str = f" [Hit: {j_cached:,} ({j_hit_pct:.1f}%)]"
-                                else:
-                                    j_cost = (j_in / 1e6 * judge_cfg['input_price']) + (j_out / 1e6 * judge_cfg['output_price'])
-                                    j_hit_str = ""
-                                
-                                j_brain_load = (j_reasoning / j_out * 100) if j_out > 0 else 0
-                                j_brain_str = f" | 🧠 Brain: {j_reasoning:,} ({j_brain_load:.1f}%)" if j_reasoning > 0 else ""
+                                j_cost, j_hit_str, j_hit_pct, j_brain_str = self._calculate_costs(j_in, j_out, j_cached, j_reasoning, judge_cfg)
 
                                 total_judge_cost += j_cost
                                 
@@ -952,7 +974,7 @@ class TranslationEngine:
                                 else:
                                     linc["target_chars"] = linc.get("target_chars", 0) + len(heb)
                                     linc["target_words"] = linc.get("target_words", 0) + len(heb.split())
-                                    linc["target_punct"] = linc.get("target_punct", 0) + len(re.findall(r'[!.?]', heb))
+                                    linc["target_punct"] = linc.get("target_punct", 0) + len(re.findall(r'[.!?-]', heb))
                                     if "\n" in heb:
                                         linc["multiline_subs"] = linc.get("multiline_subs", 0) + 1
                                         

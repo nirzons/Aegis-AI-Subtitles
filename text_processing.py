@@ -1,13 +1,34 @@
 import re
 import difflib
 
+# Pre-compiled Regex Patterns for Performance Optimization
+RE_RTL_ESCAPE = re.compile(r'\s*\\+[nננ]\s*')
+RE_HTML_TAGS = re.compile(r'^((?:<[^>]+>)*)(.*?)((?:<[^>]+>)*)$')
+RE_PUNCTUATION_END = re.compile(r'([.,?!\\\'\":;♪]+)$')
+RE_PUNCTUATION_START = re.compile(r'^([.,?!\\\'\":;♪]+)')
+RE_MUSIC_TRIM = re.compile(r"[-.\s]*")
+RE_TRAILING_COMMA_OBJ = re.compile(r',\s*\}')
+RE_TRAILING_COMMA_ARR = re.compile(r',\s*\]')
+RE_MISSING_COLON = re.compile(r'([{,])\s*"([^"\\:]+)"\s*(?=[,}\]])')
+RE_TRUNCATED_KEY = re.compile(r'([{,])\s*"[^"\\:]+"$')
+RE_HEB_ESCAPE_FIX = re.compile(r'\\+נ')
+RE_NON_PRINTABLE = re.compile(r'[\x00-\x1F\x7F]')
+RE_SDH_CLEANER = re.compile(r'\[.*?\]|\(.*?\)|♪|<.*?>')
+RE_FOREIGN_CHARS = re.compile(r'[^\x00-\x7F\u0590-\u05FF\u200E\u200F\u202A-\u202C\u2018-\u201D\u2026\u2013\u2014\u20AA\u20AC\u00A3\xA0\xB0♪♫]')
+RE_ENGLISH_WORDS = re.compile(r'[a-zA-Z]+')
+RE_EXEMPT_ACRONYM = re.compile(r'[A-Z]{2,}')
+RE_EXEMPT_SPELLED = re.compile(r'\b[A-Z](-[A-Z])+\b')
+RE_SPEAKER_NAME = re.compile(r'(?m)^(?:\s*-\s*)?([^:\n]{1,15}):')
+RE_ECHO_CLEANER = re.compile(r'[.,!?:;♪\-_]+')
+RE_SDH_BRACKETS = re.compile(r'[\[(].*?[\])]')
+
 
 def fix_rtl(text):
     if not text: return text
     
     # שלב 0: ניקוי תווי מילוט טקסטואליים שה-LLM נוטה לייצר בתוך JSON
     # אנחנו הופכים אותם לירידות שורה אמיתיות כדי שה-split הבא יזהה אותן
-    text = re.sub(r'\s*\\+[nננ]\s*', '\n', str(text))
+    text = RE_RTL_ESCAPE.sub('\n', str(text))
     
     lines = text.split('\n')
     fixed_lines = []
@@ -23,14 +44,14 @@ def fix_rtl(text):
         if is_dialogue: clean_line = re.sub(r'^-\s*', '', clean_line)
         
         # טיפול בתגיות HTML (כמו <i>) אם קיימות
-        match = re.match(r'^((?:<[^>]+>)*)(.*?)((?:<[^>]+>)*)$', clean_line)
+        match = RE_HTML_TAGS.match(clean_line)
         if match:
             leading_tags, inner_content, trailing_tags = match.group(1), match.group(2).strip(), match.group(3)
         else:
             leading_tags, inner_content, trailing_tags = "", clean_line.strip(), ""
             
         # לוגיקת היפוך פיסוק ל-RTL
-        punctuation_search = re.search(r'([.,?!\\\'\":;♪]+)$', inner_content)
+        punctuation_search = RE_PUNCTUATION_END.search(inner_content)
         if punctuation_search:
             punctuation = punctuation_search.group(1)
             main_text = inner_content[:-len(punctuation)].strip()
@@ -67,7 +88,7 @@ def unfix_rtl(text):
             
         # Handle punctuation (at the start in Visual mode)
         # Note: fix_rtl moved it to the start. We move it back to the end.
-        punc_match = re.match(r'^([.,?!\\\'\":;♪]+)', clean_line)
+        punc_match = RE_PUNCTUATION_START.match(clean_line)
         if punc_match:
             punctuation = punc_match.group(1)
             main_text = clean_line[len(punctuation):].strip()
@@ -92,7 +113,7 @@ def strip_music_glyphs_batch(heb_dict):
             
             # Now, apply the 'Empty String' logic:
             # If the resulting string is just a hyphen, a dot, or empty...
-            if re.fullmatch(r"[-.\s]*", cleaned):
+            if RE_MUSIC_TRIM.fullmatch(cleaned):
                 heb_dict[k] = ""
             else:
                 heb_dict[k] = cleaned
@@ -112,15 +133,14 @@ def pre_repair_json(raw_res):
         cleaned = cleaned.split("```")[1].split("```")[0].strip()
         
     # 2. תיקון פסיק מיותר בסוף מערך או אובייקט (Trailing Comma)
-    cleaned = re.sub(r',\s*\}', '}', cleaned)
-    cleaned = re.sub(r',\s*\]', ']', cleaned)
+    cleaned = RE_TRAILING_COMMA_OBJ.sub('}', cleaned)
+    cleaned = RE_TRAILING_COMMA_ARR.sub(']', cleaned)
     
     # 3. תיקון מפתחות שבורים (Missing Colons/Values)
     # מחפש מפתח (מחרוזת) שאחריו מגיע פסיק או סוגר, ללא נקודתיים לפניו.
     # Pattern: (Start of object or comma) + whitespace + "key" + whitespace + (?= comma or end-brace)
     # This specifically fixes: "key", -> "key": null,
-    pattern_missing_colon = r'([{,])\s*"([^"\\:]+)"\s*(?=[,}\]])'
-    cleaned = re.sub(pattern_missing_colon, r'\1 "\2": null', cleaned)
+    cleaned = RE_MISSING_COLON.sub(r'\1 "\2": null', cleaned)
     
     # 4. טיפול ב-JSON קטוע (Truncated JSON)
     # אם ה-LLM עצר באמצע, ננסה לסגור את הסוגריים כדי שיהיה ניתן לפענח לפחות חלק מהמידע.
@@ -135,7 +155,7 @@ def pre_repair_json(raw_res):
             # אם נגמר בגרשיים, נבדוק אם זה מפתח שבור בסוף ה-JSON הקטוע
             # אם לפני הגרשיים האלה (והגרשיים הפותחות שלהן) יש רצף שנראה כמו התחלה של אובייקט או פסיק
             # ננסה להוסיף : null
-            if re.search(r'([{,])\s*"[^"\\:]+"$', cleaned):
+            if RE_TRUNCATED_KEY.search(cleaned):
                 cleaned += ': null'
         
         # סגירת סוגריים בסדר הפוך
@@ -144,10 +164,10 @@ def pre_repair_json(raw_res):
 
 
     # 5. בריחת מילוט שגויה בעברית: נהפוך את הבק-סלאש לליטרלי
-    cleaned = re.sub(r'\\+נ', r'\\\\נ', cleaned)
+    cleaned = RE_HEB_ESCAPE_FIX.sub(r'\\\\נ', cleaned)
     
     # 6. ניקוי תווים בלתי נראים ו-Control Characters
-    cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
+    cleaned = RE_NON_PRINTABLE.sub('', cleaned)
     
     return cleaned
 
@@ -179,8 +199,8 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
         
         # 0. שדרוג קריטי: הסרת SDH ותגיות לפני ספירת המילים
         # מסיר: [SDH], (SDH), ♪, ותגיות HTML <...>
-        eng_text_clean = re.sub(r'\[.*?\]|\(.*?\)|♪|<.*?>', ' ', eng_text)
-        heb_text_clean = re.sub(r'\[.*?\]|\(.*?\)|♪|<.*?>', ' ', heb_text)
+        eng_text_clean = RE_SDH_CLEANER.sub(' ', eng_text)
+        heb_text_clean = RE_SDH_CLEANER.sub(' ', heb_text)
         
         # Count words for batch density and single-block ratio - עכשיו סופר רק מילים אמיתיות!
         eng_wc = len([w for w in eng_text_clean.split() if any(c.isalnum() for c in w)])
@@ -210,7 +230,7 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
 
         # 1. בדיקת "דילוג שקט" (Hebrew empty but Eng not)
         # אם אחרי שניקינו את ה-SDH ואת סימני הפיסוק לא נשאר כלום - זה אינדקס SDH טהור
-        is_pure_sdh = len(re.sub(r'[-.\s]', '', eng_text_clean)) == 0
+        is_pure_sdh = len(RE_MUSIC_TRIM.sub('', eng_text_clean)) == 0
 
         if not heb_text and eng_text.strip():
             if not is_pure_sdh:
@@ -237,19 +257,19 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
         if heb_text:  # Only check content if there IS text
             
             # בדיקת תווים זרים (כמו סינית, רוסית וכו') - משתמש בטקסט הנקי מתגיות
-            foreign_chars = re.findall(r'[^\x00-\x7F\u0590-\u05FF\u200E\u200F\u202A-\u202C\u2018-\u201D\u2026\u2013\u2014\u20AA\u20AC\u00A3\xA0\xB0♪♫]', heb_text_clean)
+            foreign_chars = RE_FOREIGN_CHARS.findall(heb_text_clean)
             if foreign_chars:
                 reasons.append(f"STRICT: Foreign characters found in {idx} ({''.join(set(foreign_chars))})")
                 heb_reasons.append(f"IDX:{idx}|נמצאו תווים זרים או סמלים לא מוכרים ({''.join(set(foreign_chars))}).")
             
-            found_eng = re.findall(r'[a-zA-Z]+', heb_text_clean)
+            found_eng = RE_ENGLISH_WORDS.findall(heb_text_clean)
             if found_eng:
                 # Exempt: all-caps acronyms (CNN, CBS), spelled-out letters (S-I-F-U)
                 actual_errors = []
                 for word in found_eng:
                     is_exempt = bool(
-                        re.fullmatch(r'[A-Z]{2,}', word) or
-                        re.search(r'\b[A-Z](-[A-Z])+\b', word)
+                        RE_EXEMPT_ACRONYM.fullmatch(word) or
+                        RE_EXEMPT_SPELLED.search(word)
                     )
                     if not is_exempt:
                         actual_errors.append(word)
@@ -262,7 +282,7 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
 
             # Refined Speaker Name Check (Checks every line, including dialogue dashes)
             # Looks for: [Optional -] [Name 1-15 chars] :
-            speaker_match = re.search(r'(?m)^(?:\s*-\s*)?([^:\n]{1,15}):', heb_text)
+            speaker_match = RE_SPEAKER_NAME.search(heb_text)
             if speaker_match:
                 found_name = speaker_match.group(1).strip()
                 # Absolute prohibited labels (Dynamic from sysprm)
@@ -312,8 +332,8 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
         
         if h1 and h2:
             # ניקוי השורה האחרונה של 1 והראשונה של 2 להשוואה (ללא סימני פיסוק וסמלים)
-            last_line = re.sub(r'[.,!?:;♪\-_]+', '', h1[-1]).strip()
-            first_line = re.sub(r'[.,!?:;♪\-_]+', '', h2[0]).strip()
+            last_line = RE_ECHO_CLEANER.sub('', h1[-1]).strip()
+            first_line = RE_ECHO_CLEANER.sub('', h2[0]).strip()
             
             # בדיקת כפילות של ביטוי משמעותי (3 מילים ומעלה)
             wc_last = len([w for w in last_line.split() if any(c.isalnum() for c in w)])
@@ -324,8 +344,8 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
                 
                 e_repeated = False
                 if e1 and e2:
-                    e_last = re.sub(r'[.,!?:;♪\-_]+', '', e1[-1]).strip()
-                    e_first = re.sub(r'[.,!?:;♪\-_]+', '', e2[0]).strip()
+                    e_last = RE_ECHO_CLEANER.sub('', e1[-1]).strip()
+                    e_first = RE_ECHO_CLEANER.sub('', e2[0]).strip()
                     if e_last == e_first and len(e_last.split()) >= 2:
                         e_repeated = True
                 
@@ -396,14 +416,14 @@ def pre_audit_source(eng_dict, illegal_labels=None):
         if not txt: continue
         
         # 1. Look for Speaker Names (e.g., JEFF:, ROCKSROY:)
-        speaker_match = re.search(r'(?m)^(?:\s*-\s*)?([^:\n]{1,15}):', txt)
+        speaker_match = RE_SPEAKER_NAME.search(txt)
         if speaker_match:
             found_name = speaker_match.group(1).strip()
             msg = f"חשד לשם דובר ('{found_name}:'). מחק את השם, אך וודא שהדיאלוג המדובר עדיין מתורגם!"
             warnings.append((idx, msg))
             
         # 2. Look for SDH tags in brackets (e.g., [music], (coughs))
-        sdh_match = re.search(r'[\[(].*?[\])]', txt)
+        sdh_match = RE_SDH_BRACKETS.search(txt)
         if sdh_match:
             content = sdh_match.group(0)
             msg = f"חשד לתיאור צליל/SDH ({content}). אם מדובר בתיאור סאונד, מחק אותו אך תרגם כל דיאלוג אחר המופיע בשורה."

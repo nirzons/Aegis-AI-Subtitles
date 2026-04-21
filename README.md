@@ -34,6 +34,7 @@ With the built-in **Live Viewer**, you can audit the translation process in real
   - **🎬 Live Intercept Feed**: Paginated English ↔ Hebrew grid with auto-scroll and 50-segment resume history.
   - **📱 Responsive Mobile View**: Compact stacked layout optimised for phone screens without losing any telemetry.
 - **📋 Clipboard Integration**: Instantly copy terminal output logs with a single button click in the main dashboard.
+- **⚡ Engine Performance**: Drastically reduced CPU footprint and memory allocation during heavy iteration loops via centralized regex compilation mapping and class-method delegate abstraction.
 - **🖥️ Local Model Support**: Optimized for LM Studio and local LLMs via **API-level Strict Mode** (JSON Schema enforcement). The engine automatically synchronizes and deduplicates the `required` keys in the schema, ensuring 100% structural stability and preventing `400 Bad Request` errors even on smaller hardware.
   > [!IMPORTANT]
   > **LM Studio Users**: You must enable the **"Structured Output"** toggle in LM Studio's Inference settings for the system's Strict Mode to function correctly.

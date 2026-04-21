@@ -4,6 +4,7 @@ import subprocess
 import json
 import re
 
+RE_FALLBACK_JSON = re.compile(r'\{.*\}', re.DOTALL)
 from google import genai
 from google.genai import types
 from openai import OpenAI
@@ -137,7 +138,7 @@ def generate_judge_schema(indices_list):
         "additionalProperties": False
     }
 
-def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False):
+def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False, response_format=None):
 
     current_temp = model_cfg.get('temperature', 0.15)
     
@@ -193,7 +194,16 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
                                  any(m in model_cfg['name'].lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
                                  (model_cfg['provider'] == 'lmstudio')
             
-            if indices_list and supports_structured:
+            if response_format is not None:
+                req_params["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "audit_output" if is_judge else "translation_output",
+                        "strict": True,
+                        "schema": response_format
+                    }
+                }
+            elif indices_list and supports_structured:
                 use_scratch = model_cfg.get('enable_scratchpad', True)
                 schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
                 req_params["response_format"] = {
@@ -262,8 +272,7 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
         client = OpenAI(api_key=api_key, base_url="http://localhost:1234/v1", timeout=2700.0, max_retries=0)
         
         # Check for Structured Output support
-        # Check for Structured Output support
-        if indices_list:
+        if response_format is not None or indices_list:
             # Prepare the call parameters
             req_params = {
                 "model": model_cfg['name'],
@@ -275,10 +284,13 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
             }
             
             # Use 'json_schema' (Strict Mode) for OpenAI high-end models AND LM Studio models.
-            # While some local models might struggle, newer ones like Gemma-2-27b-it perform better with it.
             if (model_cfg['provider'] == 'openai' and any(m in model_cfg['name'].lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or model_cfg['provider'] == 'lmstudio':
-                use_scratch = model_cfg.get('enable_scratchpad', True)
-                schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
+                if response_format is not None:
+                    schema = response_format
+                else:
+                    use_scratch = model_cfg.get('enable_scratchpad', True)
+                    schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
+                    
                 req_params["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
@@ -337,7 +349,7 @@ def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_l
         en = eng_by_index.get(idx_key, "")
         he = heb_lookup.get(idx_key, "")
         he_disp = he.strip() if isinstance(he, str) and he.strip() else "שורה זו לא תורגמה עדיין - אין לפסול אותה בשל כך - אתה בודק רק את התרגום של השורות שקדמו לה"
-        return f"{title} — אינדקס {idx_key}:\nENGLISH:\n{en}\n\nHEBREW:\n{he_disp}\n"
+        return f"{title} — אינדקס {idx_key}:\nמקור_אנגלית:\n{en}\n\nתרגום_עברית:\n{he_disp}\n"
 
     if not ordered_srt_indices or not chunk_indices:
         lines.append("(הקשר חיצוני לא סופק.)")
@@ -360,36 +372,43 @@ def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_l
 
 def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordered_srt_indices,
                    log_func=None, progress_func=None, file_log_func=None, 
-                   audit_reason_heb=None, eng_by_index=None, heb_completed_by_index=None, ui_queue=None):
+                   audit_reason_heb=None, eng_by_index=None, heb_completed_by_index=None, ui_queue=None, judge_batch_size=None):
     """
     Calls a second LLM to audit the translation batch.
     Returns: (is_overall_valid, error_map, in, out, cached, reasoning)
     """
-    from constants import judge_batch_size
     from text_processing import pre_repair_json
     
-    try:
-        chunk_size = int(judge_batch_size)
-    except ValueError:
-        chunk_size = 20
+    if judge_batch_size is not None:
+        try:
+            chunk_size = int(judge_batch_size)
+        except ValueError:
+            chunk_size = 20
+    else:
+        from constants import judge_batch_size as default_judge_batch
+        try:
+            chunk_size = int(default_judge_batch)
+        except ValueError:
+            chunk_size = 20
 
     supports_structured = (judge_model_cfg.get('provider') == 'openai' and 
                           any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
                           (judge_model_cfg.get('provider') == 'lmstudio')
 
     system_prompt = f"""אתה אודיטור QA חסר רחמים. תפקידך למצוא שגיאות טכניות בתרגום כתוביות (עונה 42 של הישרדות).
-נתון לך גם CONTEXTUAL OVERLAP לצורך הקשר בלבד - אל תבצע עליו ביקורת!
+נתון לך גם בלוק של כתוביות חופפות לצורך הקשר בלבד - אל תבצע עליו ביקורת!
 
 ### חוקי הפסילה (אם אחד מהם מתקיים, עליך לפסול את הבאץ'): ###
-1. OMISSION: המקור מכיל מלל (מעל 2 מילים) והתרגום ריק.
-2. LEAKAGE (קריטי!): שם דובר נשאר בתרגום (למשל ROCKSROY: או רוקסרוי:).
-3. SDH: תיאורי צליל (למשל: [מוזיקה] או (שיעול)) נשארים בתרגום. **חריג:** דיאלוג בסוגריים (לחישה) הוא תקין.
-4. ENGLISH: קיימת אנגלית בתוך התרגום.
-5. TAGS: חוסר התאמה בתגיות עיצוב (כמו <i>).
+1. השמטת טקסט: המקור מכיל מלל (מעל 2 מילים) והתרגום ריק.
+2. דליפת שמות (קריטי!): שם דובר נשאר בתרגום (למשל ROCKSROY: או רוקסרוי:).
+3. חותמות שמע: תיאורי צליל (למשל: [מוזיקה] או (שיעול)) נשארים בתרגום. **חריג:** דיאלוג בסוגריים (לחישה) הוא תקין.
+4. שאריות אנגלית: קיימת אנגלית בתוך התרגום ללא הצדקה.
+5. תגיות: חוסר התאמה בתגיות עיצוב (כמו <i>).
 
 ### הנחיות קריטיות נגד עצלנות (חובה): ###
+- חובה לענות בעברית בלבד! כל הטקסטים שאתה כותב ב-thought_process, ב-summary, ובתיאור השגיאות חייבים להיות מנוסחים בעברית התקנית. הופעת משפטים באנגלית תחשב לכישלון טכני.
 - חל איסור מוחלט על שימוש ב-"..."! אתה חייב לכתוב לפחות 2 משפטים מלאים בעברית בכל שדה טקסט.
-- אל תשתמש במילים בודדות כמו "LEAKAGE" בתיאור השגיאה. כתוב בדיוק מה הטעות (למשל: "השם ג'ף נשאר בתחילת השורה").
+- אל תשתמש במילים בודדות לתיאור השגיאה. כתוב בדיוק מה הטעות (למשל: "השם ג'ף נשאר בתחילת השורה").
 - אם הבאץ' תקין לחלוטין: סמן is_rejected: false.
 - אם מצאת ולו טעות אחת זעירה: סמן is_rejected: true.
 
@@ -425,10 +444,10 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
 
 {overlap_str}
 
-SOURCE (ENGLISH):
+מקור_אנגלית:
 {source_str}
 
-TRANSLATED (HEBREW):
+תרגום_עברית:
 {trans_str}
 """
         # SURGICAL INJECTION: Only show audit reasons relevant to THIS chunk
@@ -442,8 +461,9 @@ TRANSLATED (HEBREW):
                     # Match pattern like IDX:25 or IDX:25,26
                     try:
                         idx_part = r.split("|")[0].replace("IDX:", "").strip()
-                        affected_indices = [int(i.strip()) for i in idx_part.split(",")]
-                        if any(i in chunk_indices for i in affected_indices):
+                        # `chunk_indices` contains strings (e.g. "6"). Ensure affected indices are strings.
+                        affected_indices = [str(i.strip()) for i in idx_part.split(",")]
+                        if any((i in chunk_indices) for i in affected_indices):
                             relevant_reasons.append(r)
                     except:
                         # Fallback: if we can't parse safely, include it to be safe
@@ -454,10 +474,10 @@ TRANSLATED (HEBREW):
 
             if relevant_reasons:
                 reasons_text = "\n".join(relevant_reasons)
-                user_prompt += f"\n### מערכת ה-Audit זיהתה בעיה: ###\n{reasons_text}\nבדוק האם זו אכן שגיאה לפי חוקי הפסילה עבור האינדקסים בבאץ' הזה בלבד.\n"
+                user_prompt += f"\n### התראת מערכת אוטומטית (Audit): ###\n{reasons_text}\nשים לב: אלגוריתם הבדיקה זיהה את השגיאה הנ\"ל פיזית בתוך שדה התרגום_עברית. קרא את האינדקס המדובר בשדה התרגום שוב בעיון רב כדי לאמת זאת. אל תתעלם מהתראה זו, היא כנראה נכונה!\n"
 
         user_prompt += "### סוף נתונים ###\n"
-        user_prompt += "\nאזהרה חמורה: אל תדמיין שגיאות! לפני שאתה קובע 'is_rejected: true', ודא שהשגיאה מופיעה פיזית ב-TRANSLATED.\n"
+        user_prompt += "\nאזהרה אחרונה: פסול את הבאץ' (is_rejected: true) אם אתה רואה את השגיאה במו עיניך בתוך שדה התרגום (תרגום_עברית). אל תפסול אם השגיאה מופיעה אך ורק במקור (מקור_אנגלית).\n"
 
         judge_schema = {
             "type": "object",
@@ -529,8 +549,7 @@ TRANSLATED (HEBREW):
             try:
                 parsed = json.loads(pre_repair_json(raw_res))
             except:
-                import re
-                match = re.search(r'\{.*\}', raw_res, re.DOTALL)
+                match = RE_FALLBACK_JSON.search(raw_res)
                 if match:
                     try: parsed = json.loads(pre_repair_json(match.group(0)))
                     except: continue
@@ -546,15 +565,21 @@ TRANSLATED (HEBREW):
             master_error_map.update(err_map)
 
             if log_func:
+                tok_str = f"(In: {in_t:,} | Out: {out_t:,})" if (in_t or out_t) else ""
                 if is_rejected:
                     desc = "; ".join([f"{k}: {v}" for k, v in err_map.items() if v])
-                    log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED — {desc}")
+                    log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED {tok_str} — {desc}")
                 else:
-                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}: PASSED")
+                    log_func(f"   ↳ ✅ Judge Chunk {idx+1}: PASSED {tok_str}")
+            
+            if is_rejected:
+                if log_func: log_func("   ↳ 🛑 Short-circuiting remaining chunks to save time.")
+                break
 
         except Exception as e:
             if log_func: log_func(f"   ↳ ❌ Judge Chunk {idx+1} Exception: {e}")
-            continue
+            is_overall_valid = False
+            break
 
     return is_overall_valid, master_error_map, total_in, total_out, total_cached, total_reasoning
     return is_overall_valid, master_error_map, total_in, total_out, total_cached, total_reasoning
