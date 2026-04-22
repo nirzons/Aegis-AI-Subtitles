@@ -739,18 +739,30 @@ class TranslationEngine:
                             # Schema Recovery Layer: Handle GPT-5 key hallucinations
                             received_dict = self._recover_schema(res_json, stats, session_log_file)
 
-                            # --- Italic Passthrough: Post-Processing ---
-                            # Restore global italics for identified indices
-                            if batch_italic_indices:
-                                restored_count = 0
-                                for idx in batch_italic_indices:
-                                    if idx in received_dict:
-                                        heb_text = str(received_dict[idx]).strip()
-                                        if heb_text and not (heb_text.startswith('<i>') and heb_text.endswith('</i>')):
-                                            received_dict[idx] = f"<i>{heb_text}</i>"
-                                            restored_count += 1
-                                if restored_count > 0 and getattr(self, 'debug_mode', False):
-                                    log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Restored global italics for indices: {', '.join(sorted(batch_italic_indices))}")
+                            # --- Italic Passthrough: Authoritative Enforcement ---
+                            # We ensure italics exist ONLY where they existed in the source.
+                            it_restored = 0
+                            it_stripped = 0
+                            for idx in indices:
+                                if idx not in received_dict: continue
+                                heb_text = str(received_dict[idx]).strip()
+                                
+                                # Case A: Should have italics
+                                if idx in batch_italic_indices:
+                                    if heb_text and not (heb_text.startswith('<i>') and heb_text.endswith('</i>')):
+                                        received_dict[idx] = f"<i>{heb_text}</i>"
+                                        it_restored += 1
+                                
+                                # Case B: Should NOT have italics (Hallucination removal)
+                                else:
+                                    if heb_text.startswith('<i>') and heb_text.endswith('</i>'):
+                                        # Use a simple strip if it's perfectly wrapped
+                                        received_dict[idx] = heb_text[3:-4].strip()
+                                        it_stripped += 1
+
+                            if (it_restored > 0 or it_stripped > 0) and getattr(self, 'debug_mode', False):
+                                log_msg = f"✨ [Italic Passthrough] Enforcement: Restored {it_restored} | Stripped hallucinated {it_stripped}"
+                                log(self.log_queue, session_log_file, log_msg)
 
                             changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file)
 
