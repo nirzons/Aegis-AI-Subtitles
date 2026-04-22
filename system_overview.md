@@ -26,10 +26,11 @@ A unified abstraction layer for multiple providers:
 
 ### 4. Heuristic & AI Auditing (`text_processing.py` & `llm_api.py`)
 A multi-tier validation system prioritizing minimal token usage and localized reasoning:
-1.  **Heuristic Auditor (Forensic Scout)**: Checks for strict length limits, English leakage (SDH), and illegal speaker names. It uses **Hyper-Specific Extraction** to identify exactly which strings caused the failure. 
-2.  **Surgical Prompt Injection**: The engine routes the exact string failures caught by the Heuristic Auditor directly into the AI Judge's prompt for the specific chunk where the error occurred, heavily anchoring the LLM and preventing False Negatives.
-3.  **Localized AI Judge**: A semantic auditor checking for nuanced errors like omissions and tags. It is structurally decoupled from English anchors, enforcing a pure Hebrew reasoning space (`thought_process`, `summary`, `error_map`) to prevent schema inertia and language hallucination in natively-trained models.
-4.  **Short-Circuit Auditing**: Evaluates chunks sequentially. The moment the Judge flags a chunk as rejected, the pipeline instantly aborts testing the remaining chunks, significantly saving latency and compute costs.
+- **Forensic Scout & Surgical Injection**: A pre-processing layer that identifies potential technical pitfalls (SDH descriptions, speaker names, mismatched tags) and surgically injects targeted warnings into the relevant chunk's prompt.
+- **Short-Circuit Auditing**: A performance optimization where if any chunk in a batch is rejected by the AI Judge, the remaining audits are immediately halted to save tokens and time.
+- **Parser Safety (Italic Passthrough)**: A robust pre-processor that identifies subtitles entirely wrapped in italics. It uses dual-regex patterns to strip `<i>` tags from single and double-wrapped multi-line blocks, allowing the LLM to focus on pure translation before automatically restoring the formatting tags. This prevents source data truncation and formatting hallucinations.
+- **Source Integrity Shield**: Forensic Scout now audits the source English files themselves for technical errors (like mismatched tags), alerting the user before translation begins.
+- **Localized AI Judge**: A semantic auditor checking for nuanced errors like omissions and tags. It is structurally decoupled from English anchors, enforcing a pure Hebrew reasoning space (`thought_process`, `summary`, `error_map`) to prevent schema inertia and language hallucination in natively-trained models.
 
 ### 5. Settings & Config (`settings.py` & `constants.py`)
 Manages persistent state across sessions. Supports dynamic model pricing and **Cache Discount** calculation, allowing the system to accurately track costs even as API providers change their pricing structures.
@@ -37,7 +38,7 @@ Manages persistent state across sessions. Supports dynamic model pricing and **C
 ### 6. Web Monitoring Architecture (`web_server.py`, `shared_state.py`, `web/`)
 A high-fidelity, read-only monitoring layer built on **FastAPI** and **WebSockets**, with a **Tailwind CSS V3 Command Center** frontend.
 - **Thread-Safe Reflection**: A `SharedState` singleton bridges the translation engine thread and the web server without blocking either. Changes increment a monotonic version counter; the WS server pushes a new snapshot only when the version changes.
-- **V3 Telemetry Hooks**: The engine calls `update_telemetry()` (tokens/sec, cache hit %) and `update_audit()` (batch size, batch trend, cause label) at key pipeline moments, feeding the live topbar.
+- **V3 Telemetry Hooks**: The engine calls `update_telemetry()` (tokens/sec, cache hit %) and `update_audit()` (batch size, batch trend, cause label) at key pipeline moments, feeding the live topbar. The system has been hardened to use "Batch Size" exclusively, eliminating redundant "Stride/Windowing" terminology to improve diagnostic clarity.
 - **Cause Labelling**: Every batch attempt updates the dashboard's "Cause" field — fresh batches show `✦ Fresh Batch`, while failures inject the specific reason (`Auditor: Failed & Retry`, `⚠️ Parse Error: Retry`, etc.) so the current retry is always self-explanatory.
 - **Batch Size Arrow**: The JS frontend tracks actual batch size changes client-side (mirroring Tkinter's `lbl_status` arrow logic) and persists the ↑/↓ indicator until the next genuine size change.
 - **Responsive Layout**: Desktop browsers show Terminal Logs and Live Intercept Feed side-by-side (`md:flex-row`); mobile stacks them vertically. All telemetry remains visible on both form factors.
@@ -62,7 +63,7 @@ The system utilizes a Least-Squares Regression model (`Time = b + a * size`) to 
 Performance data is split into **New** and **Retry** datasets. Since retries involve complex error-correction logic and longer prompt feedback, they are modeled separately to ensure accurate countdowns during difficult segments.
 
 ### 3. Auditing Visibility
-The AI Judge broadcasts its internal chunking state. For large batches, the UI displays granular progress (e.g., `Judging 1/3...`) as the auditor traverses the batch, ensuring the user knows the application is active after the main model has returned.
+The AI Judge broadcasts its internal chunking state. For large batches, the UI displays granular progress (e.g., `Judging 1/3...`) as the auditor traverses the batch, ensuring the user knows the application is active after the main model has returned. Detailed log signatures and their visibility modes (Regular vs. Debug) are documented in the **[Logging Audit](logging_audit.md)**.
 
 ---
 

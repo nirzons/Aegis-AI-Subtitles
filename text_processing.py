@@ -429,7 +429,12 @@ def pre_audit_source(eng_dict, illegal_labels=None):
             msg = f"חשד לתיאור צליל/SDH ({content}). אם מדובר בתיאור סאונד, מחק אותו אך תרגם כל דיאלוג אחר המופיע בשורה."
             warnings.append((idx, msg))
 
-        # 3. Look for Music symbols
+        # 3. Look for Source Tag Mismatches (Extreme technical hardening)
+        if txt.count('<') != txt.count('>') or txt.count('<i>') != txt.count('</i>'):
+            msg = "זוהה חוסר התאמה בתגיות במקור האנגלי. זה עלול לגרום לשגיאות תרגום או פסילה ע\"י השופט. מומלץ לתקן את קובץ המקור."
+            warnings.append((idx, msg))
+
+        # 4. Look for Music symbols
         if "♪" in txt:
             msg = "נמצא סמל מוזיקה ♪. מחק אותו מהתרגום."
             warnings.append((idx, msg))

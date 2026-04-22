@@ -456,8 +456,8 @@ class TranslationEngine:
                     current_batch_size = effective_batch_size
                     batch_success = False
                     min_batch_failures = 0  # at size 2, allow up to 3 attempts before total failure
-                    attempted_strides = []  # strides tried this chunk; on success after retries, effective = one-before-last
-                    failures_at_current_stride = 0  # need 2 failures at same stride before shrinking (avoids one-off glitches)
+                    attempted_batch_sizes = []  # sizes tried this chunk; on success after retries, effective = one-before-last
+                    failures_at_current_size = 0  # need 2 failures at same size before shrinking (avoids one-off glitches)
 
                     last_judge_error = ""      # הטקסט של השגיאה
                     last_judged_indices = set() # האינדקסים שהיו בתוך ה-Chunk שנפסל
@@ -466,7 +466,7 @@ class TranslationEngine:
                     while not batch_success and not self.should_stop:
                         batch_diagnostics_logged = False
                         this_attempt_auditor_flagged = False  # reset each attempt
-                        attempted_strides.append(current_batch_size)
+                        attempted_batch_sizes.append(current_batch_size)
                         start_idx = current_index
                         end_idx = min(current_index + current_batch_size, total_blocks)
                         expected_count = end_idx - start_idx
@@ -508,17 +508,36 @@ class TranslationEngine:
                         # --- Italic Passthrough: Pre-Processing ---
                         # We identify subtitles entirely wrapped in <i>...</i>
                         # We strip them to make the LLM's job easier and prevent \nt artifacts.
+                        # Rule: Only strip if the ENTIRE block is italicized (1 or 2 lines).
+                        # We use anchored regex to ensure no text exists outside the tags.
                         batch_italic_indices = set()
                         final_input_payload = {}
+                        
+                        # [^<>] ensures we don't cross into other tags; re.DOTALL allows matching across newlines
+                        RE_ITALIC_S = re.compile(r'^<i>(?P<c>[^<>]*)</i>$', re.DOTALL)
+                        RE_ITALIC_D = re.compile(r'^<i>(?P<c1>[^<>\n]*)</i>\n<i>(?P<c2>[^<>\n]*)</i>$')
+                        
                         for idx, txt in input_payload.items():
                             stripped_txt = txt.strip()
-                            # Check if the text starts with <i> and ends with </i> and has NO other tag pairs in between
-                            # A simple check: starts/ends with tags + only one occurrence of the opening tag.
-                            if stripped_txt.startswith('<i>') and stripped_txt.endswith('</i>') and stripped_txt.count('<i>') == 1:
-                                final_input_payload[idx] = stripped_txt[3:-4].strip()
+                            
+                            match_s = RE_ITALIC_S.match(stripped_txt)
+                            match_d = RE_ITALIC_D.match(stripped_txt)
+                            
+                            if match_s:
+                                # Case 1: Single wrap (even if multi-line)
+                                final_input_payload[idx] = match_s.group('c').strip()
+                                batch_italic_indices.add(idx)
+                            elif match_d:
+                                # Case 2: Double wrap (each line has its own pair)
+                                # We preserve the newline but strip all outer tags
+                                final_input_payload[idx] = f"{match_d.group('c1').strip()}\n{match_d.group('c2').strip()}"
                                 batch_italic_indices.add(idx)
                             else:
+                                # Case 3: Mixed text or complex tags - leave As-Is
                                 final_input_payload[idx] = txt
+                                
+                        if batch_italic_indices and getattr(self, 'debug_mode', False):
+                            log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Stripped outer italics for indices: {', '.join(sorted(batch_italic_indices))}")
 
                         text_chunk_parts.append(f"### [בלוקים לתרגום - JSON] ###\n{json.dumps(final_input_payload, ensure_ascii=False, indent=2)}\n")
                         
@@ -625,8 +644,8 @@ class TranslationEngine:
                         _batch_system_prompt = system_prompt
                         _batch_user_prompt = final_prompt
                         try:
-                            log(self.log_queue, session_log_file, f"⏳ Sending Batch (Indices: {indices[0]}-{indices[-1]} | cues: {expected_count}, stride: {current_batch_size})...")
-                            is_retry = (len(attempted_strides) > 1)
+                            log(self.log_queue, session_log_file, f"⏳ Sending Batch (Indices: {indices[0]}-{indices[-1]} | Batch Size: {expected_count})...")
+                            is_retry = (len(attempted_batch_sizes) > 1)
                             # Calculate load (total character count of English text)
                             batch_load = sum(len(str(val)) for val in input_payload.values())
                             self.ui_queue.put(("timer_start", {"size": len(input_payload), "load": batch_load, "is_retry": is_retry}))
@@ -706,7 +725,7 @@ class TranslationEngine:
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
 
                             # Immediate Terminal logging
-                            log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}{brain_str}) | Total Main: {fmt_val(total_main_cost)}")
+                            log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}{brain_str}) | Total: {fmt_val(total_main_cost)}")
 
                             cleaned_res = pre_repair_json(raw_res)
                             try:
@@ -732,7 +751,7 @@ class TranslationEngine:
                                         if heb_text and not (heb_text.startswith('<i>') and heb_text.endswith('</i>')):
                                             received_dict[idx] = f"<i>{heb_text}</i>"
                                             restored_count += 1
-                                if restored_count > 0:
+                                if restored_count > 0 and getattr(self, 'debug_mode', False):
                                     log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Restored global italics for indices: {', '.join(sorted(batch_italic_indices))}")
 
                             changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file)
@@ -855,7 +874,8 @@ class TranslationEngine:
                                     file_log_func=lambda m: file_log(session_log_file, m),
                                     audit_reason_heb=heb_audit_reason,
                                     progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t))),
-                                    ui_queue=self.ui_queue
+                                    ui_queue=self.ui_queue,
+                                    debug_mode=getattr(self, 'debug_mode', False)
                                 )
                                 self.ui_queue.put(("judge_stop", None))
 
@@ -1011,7 +1031,7 @@ class TranslationEngine:
                                 # We count it as 'Sensitivity' metric.
                                 stats["auditor_false_positives"] = stats.get("auditor_false_positives", 0) + 1
 
-                            if len(attempted_strides) == 1 and not this_attempt_auditor_flagged:
+                            if len(attempted_batch_sizes) == 1 and not this_attempt_auditor_flagged:
                                 _inc_by_size(stats["clean_passes_by_size"], current_batch_size)
                             # ──────────────────────────────────────────────
 
@@ -1078,20 +1098,20 @@ class TranslationEngine:
                                     break
                                 log(self.log_queue, session_log_file, f"🔁 Minimal batch (size 2) attempt {min_batch_failures}/3 failed; retrying same size...")
                             else:
-                                failures_at_current_stride += 1
-                                if failures_at_current_stride < 2:
-                                    log(self.log_queue, session_log_file, f"🔁 Same stride ({current_batch_size}): first failure—retrying without reducing (guards against accidental glitches).")
+                                failures_at_current_size += 1
+                                if failures_at_current_size < 2:
+                                    log(self.log_queue, session_log_file, f"🔁 Same size ({current_batch_size}): first failure—retrying without reducing (guards against accidental glitches).")
                                 else:
-                                    failures_at_current_stride = 0
+                                    failures_at_current_size = 0
                                     reduce_by = max(3, current_batch_size // 6)
                                     current_batch_size = max(2, current_batch_size - reduce_by)
                                     stats["batch_shrink_events"] += 1
-                                    log(self.log_queue, session_log_file, f"📉 Second failure at this stride; reducing by {reduce_by} → {current_batch_size} and retrying...")
+                                    log(self.log_queue, session_log_file, f"📉 Second failure at this size; reducing by {reduce_by} → {current_batch_size} and retrying...")
 
                     if batch_success:
                         prev_effective = effective_batch_size
                         # If we succeeded on the FIRST attempt, increment streak
-                        if len(attempted_strides) == 1:
+                        if len(attempted_batch_sizes) == 1:
                             success_streak += 1
                         else:
                             success_streak = 0 # Reset if it took retries                        
@@ -1104,13 +1124,13 @@ class TranslationEngine:
                             stats["batch_grow_events"] += 1
                             log(self.log_queue, session_log_file, f"📈 Success streak {success_streak}: Climbing up → {effective_batch_size}")
                             success_streak = 0 # Reset streak to stabilize at new size
-                        elif len(attempted_strides) >= 2:
-                            # e.g. strides 60→50→42 succeeded at 42 → next chunk uses 50 (penultimate attempt)
-                            effective_batch_size = attempted_strides[-2]
+                        elif len(attempted_batch_sizes) >= 2:
+                            # e.g. sizes 60→50→42 succeeded at 42 → next chunk uses 50 (penultimate attempt)
+                            effective_batch_size = attempted_batch_sizes[-2]
                         else:
                             effective_batch_size = current_batch_size
                         if effective_batch_size != prev_effective:
-                            log(self.log_queue, session_log_file, f"📌 Effective batch size → {effective_batch_size} (penultimate stride after retries; following chunks start here)")
+                            log(self.log_queue, session_log_file, f"📌 Effective batch size → {effective_batch_size} (penultimate size after retries; following chunks start here)")
                         current_index += expected_count
 
                         # ── Update accumulated elapsed time & write checkpoint ─

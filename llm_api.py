@@ -372,7 +372,7 @@ def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_l
 
 def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordered_srt_indices,
                    log_func=None, progress_func=None, file_log_func=None, 
-                   audit_reason_heb=None, eng_by_index=None, heb_completed_by_index=None, ui_queue=None, judge_batch_size=None):
+                   audit_reason_heb=None, eng_by_index=None, heb_completed_by_index=None, ui_queue=None, judge_batch_size=None, debug_mode=False):
     """
     Calls a second LLM to audit the translation batch.
     Returns: (is_overall_valid, error_map, in, out, cached, reasoning)
@@ -567,8 +567,11 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
             if log_func:
                 tok_str = f"(In: {in_t:,} | Out: {out_t:,})" if (in_t or out_t) else ""
                 if is_rejected:
-                    desc = "; ".join([f"{k}: {v}" for k, v in err_map.items() if v])
-                    log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED {tok_str} — {desc}")
+                    if debug_mode:
+                        desc = "; ".join([f"{k}: {v}" for k, v in err_map.items() if v])
+                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED {tok_str} — {desc}")
+                    else:
+                        log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED {tok_str}")
                 else:
                     log_func(f"   ↳ ✅ Judge Chunk {idx+1}: PASSED {tok_str}")
             

@@ -104,3 +104,9 @@ A deterministic auditor that runs before any AI check. It instantly catches "lea
 
 ### 3. Reasoner Optimization
 Specialized handling for "Reasoning" models (GPT-5/o1). Aegis utilizes the `developer` role to isolate instructions from content, ensuring **90%+ cache hit ratios** and preventing "Schema Collapse" even when the model goes off-script.
+
+---
+
+## 📚 Technical Documentation
+- **[System Overview](system_overview.md)**: Deep dive into the architecture and resilience features.
+- **[Logging Audit](logging_audit.md)**: Comprehensive guide to terminal and diagnostic log signatures.
