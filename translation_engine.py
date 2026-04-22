@@ -3,6 +3,8 @@ import time
 import datetime
 import json
 import re
+import sys
+import importlib
 
 RE_SDH_PUNCT = re.compile(r"[-.\s]*[\[(].*?[\])][-.\s]*")
 RE_GHOST_CHARS = re.compile(r'\n[a-zA-Z]{1,2}(?=\s|[א-ת]|<|♪)')
@@ -403,7 +405,6 @@ class TranslationEngine:
             # Initial GUI priming
             self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
             if self.shared_state:
-                from app_utils import format_cost_display
                 self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
 
             log(self.log_queue, session_log_file, f"🚀 Starting Protected AI Translation with {model_cfg['provider']}")
@@ -590,7 +591,6 @@ class TranslationEngine:
                         # --- PROMPT INJECTION: Pre-emptive Support ---
                         # We scan the SOURCE text to see if there are tricky spots (Names, SDH)
                         # and warn the translator in advance.
-                        import importlib
                         import text_processing
                         importlib.reload(text_processing)
                         pre_warnings = text_processing.pre_audit_source(input_payload, illegal_labels=self.illegal_labels)
@@ -688,7 +688,6 @@ class TranslationEngine:
                                     
                                 # Pretty-print JSON for logs if possible
                                 try:
-                                    from text_processing import pre_repair_json
                                     pretty_res = json.dumps(json.loads(pre_repair_json(raw_res)), indent=4, ensure_ascii=False)
                                 except:
                                     pretty_res = raw_res.strip()
@@ -719,7 +718,6 @@ class TranslationEngine:
                             # Immediate GUI update
                             self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                             if self.shared_state:
-                                from app_utils import format_cost_display
                                 self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
                             
                             def fmt_val(v): return f"{int(v):,}" if v > 100 else f"${v:.5f}"
@@ -891,7 +889,6 @@ class TranslationEngine:
                                 # Immediate GUI update
                                 self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                                 if self.shared_state:
-                                    from app_utils import format_cost_display
                                     self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
                                 
                                 # Immediate Terminal logging
