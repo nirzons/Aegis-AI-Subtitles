@@ -5,12 +5,22 @@ import json
 import re
 import sys
 import importlib
+import subprocess
+import queue
 
 RE_SDH_PUNCT = re.compile(r"[-.\s]*[\[(].*?[\])][-.\s]*")
 RE_GHOST_CHARS = re.compile(r'\n[a-zA-Z]{1,2}(?=\s|[א-ת]|<|♪)')
 RE_SYS_IDX = re.compile(r'###\s*(\d+)\.')
 RE_NAME_LABELS = re.compile(r'([A-Z][a-z]+|\([\u0590-\u05FF]+\))')
 RE_NEWLINE_CLEANUP = re.compile(r'\s*\\+[nננ]\s*')
+
+# Italic Passthrough: pre-compiled at module level for performance.
+# RE_ITALIC_S: single <i>…</i> wrap, content may span multiple lines.
+#   Uses [^<>\n]*(?:\n[^<>\n]*)* instead of [^<>]* because re.DOTALL only
+#   affects '.', not character classes — so [^<>]* would never match a newline.
+# RE_ITALIC_D: two lines each with their own <i>…</i> pair.
+RE_ITALIC_S = re.compile(r'^<i>(?P<c>[^<>\n]*(?:\n[^<>\n]*)*)</i>$')
+RE_ITALIC_D = re.compile(r'^<i>(?P<c1>[^<>\n]*)</i>\n<i>(?P<c2>[^<>\n]*)</i>$')
 
 import threading
 from constants import (
@@ -34,6 +44,7 @@ class TranslationEngine:
         self.shared_state = shared_state # Added for Web Dashboard V3
         self.should_stop = False
         self.current_output_file = None
+        self.intervention_choice_q = queue.Queue() # Communication channel for user decisions
 
     def request_stop(self):
         self.should_stop = True
@@ -467,6 +478,7 @@ class TranslationEngine:
                     while not batch_success and not self.should_stop:
                         batch_diagnostics_logged = False
                         this_attempt_auditor_flagged = False  # reset each attempt
+                        heb_audit_reason = ""  # ensure always defined if call_llm fails before check_heuristics
                         attempted_batch_sizes.append(current_batch_size)
                         start_idx = current_index
                         end_idx = min(current_index + current_batch_size, total_blocks)
@@ -513,10 +525,6 @@ class TranslationEngine:
                         # We use anchored regex to ensure no text exists outside the tags.
                         batch_italic_indices = set()
                         final_input_payload = {}
-                        
-                        # [^<>] ensures we don't cross into other tags; re.DOTALL allows matching across newlines
-                        RE_ITALIC_S = re.compile(r'^<i>(?P<c>[^<>]*)</i>$', re.DOTALL)
-                        RE_ITALIC_D = re.compile(r'^<i>(?P<c1>[^<>\n]*)</i>\n<i>(?P<c2>[^<>\n]*)</i>$')
                         
                         for idx, txt in input_payload.items():
                             stripped_txt = txt.strip()
@@ -671,7 +679,19 @@ class TranslationEngine:
                             batch_call_start = time.time()
                             # ──────────────────────────────────────────────
 
-                            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(model_cfg, system_prompt, final_prompt, api_key, indices_list=indices)
+                            # --- Dynamic Temperature (Heat-up) Logic ---
+                            # Only applied to batch size 2 to overcome deterministic stagnation.
+                            temp_cfg = model_cfg.copy()
+                            if current_batch_size == 2:
+                                if min_batch_failures == 1:
+                                    temp_cfg['temperature'] = 0.3
+                                    log(self.log_queue, session_log_file, "🌡️ [Heat-up] Minimal batch attempt 2: Setting temperature to 0.3")
+                                elif min_batch_failures == 2:
+                                    temp_cfg['temperature'] = 0.7
+                                    log(self.log_queue, session_log_file, "🔥 [High Heat] Minimal batch attempt 3: Setting temperature to 0.7")
+                            # -------------------------------------------
+
+                            raw_res, in_tokens, out_tokens, cached_tokens, reasoning_tokens = call_llm(temp_cfg, system_prompt, final_prompt, api_key, indices_list=indices)
 
                             if getattr(self, 'debug_mode', False) and raw_res:
                                 timestamp_str = datetime.datetime.now().strftime("%H:%M:%S")
@@ -725,6 +745,9 @@ class TranslationEngine:
                             # Immediate Terminal logging
                             log(self.log_queue, session_log_file, f"💰 [Main Model] Batch: {fmt_val(batch_cost)} (In: {in_tokens:,}{hit_str} / Out: {out_tokens:,}{brain_str}) | Total: {fmt_val(total_main_cost)}")
 
+                            # --- Calculate Velocity for Telemetry ---
+                            pipeline_velocity = batch_load / _call_duration if _call_duration > 0 else 0
+
                             cleaned_res = pre_repair_json(raw_res)
                             try:
                                 res_json = json.loads(cleaned_res)
@@ -755,10 +778,17 @@ class TranslationEngine:
                                 
                                 # Case B: Should NOT have italics (Hallucination removal)
                                 else:
-                                    if heb_text.startswith('<i>') and heb_text.endswith('</i>'):
-                                        # Use a simple strip if it's perfectly wrapped
-                                        received_dict[idx] = heb_text[3:-4].strip()
-                                        it_stripped += 1
+                                    # Only strip if the original source had ZERO italics.
+                                    # If the source had italics in the middle, we don't want to blindly 
+                                    # strip outer <i> added by the LLM as it might be intentional wrapping.
+                                    source_text = str(input_payload.get(idx, ""))
+                                    if "<i>" not in source_text:
+                                        # Use regex to strip outer <i>...</i> only if they're perfectly wrapping the content
+                                        # This handles cases like <i>...<i>...</i>...</i> correctly.
+                                        match = re.match(r"^<i>(.*)</i>$", heb_text, re.DOTALL)
+                                        if match:
+                                            received_dict[idx] = match.group(1).strip()
+                                            it_stripped += 1
 
                             if (it_restored > 0 or it_stripped > 0) and getattr(self, 'debug_mode', False):
                                 log_msg = f"✨ [Italic Passthrough] Enforcement: Restored {it_restored} | Stripped hallucinated {it_stripped}"
@@ -951,108 +981,15 @@ class TranslationEngine:
                                     msg = f"✅ Judge Approved: {judge_reason}" if judge_reason and judge_reason != {} else "✅ Judge Approved"
                                     log(self.log_queue, session_log_file, msg)
 
-                            translated_lines = []
-                            for m in original_metadata:
-                                idx = m['index']
-                                heb_text = received_dict[idx]
-                                translated_lines.append(f"{idx}\n{m['timestamp']}\n{fix_rtl(heb_text)}")
-                                # Emit each successful segment for high-frequency web dashboard updates. 
-                                # Note: We use RAW heb_text here because it's already 'Logical RTL' from the LLM.
-                                self.ui_queue.put(("segment", (idx, m['timestamp'], m['text'], heb_text)))
-                            
-                            f_out.write('\n\n'.join(translated_lines) + '\n\n')
-                            f_out.flush()
-
-                            for m in original_metadata:
-                                translated_heb_by_index[m['index']] = fix_rtl(received_dict[m['index']])
-                            
-                            # Harvest flattened context state from response root
-                            context_state['summary'] = res_json.get('summary', context_state.get('summary'))
-                            context_state['last_speaker_info'] = res_json.get('last_speaker_info', context_state.get('last_speaker_info'))
-                            context_state['continuity_note'] = res_json.get('continuity_note', context_state.get('continuity_note'))
-                            if indices:
-                                last_idx = indices[-1]
-                                context_state['last_two_lines_heb'] = [received_dict[last_idx]]
+                            self._finalize_batch_success(
+                                original_metadata, received_dict, f_out, 
+                                translated_heb_by_index, res_json, context_state, 
+                                stats, indices, expected_count, pipeline_load, pipeline_start_time
+                            )
 
                             processed += expected_count 
                             session_processed += expected_count
                             batch_success = True
-
-                            # ── Batch success tracking ─────────────────────
-                            stats["total_batches_succeeded"] += 1
-                            
-                            # Forensic Linguistic Analysis
-                            linc = stats.get("linguistics", {})
-                            for m in original_metadata:
-                                idx = m['index']
-                                eng = m['text']
-                                heb = received_dict.get(idx, "").strip()
-                                
-                                # Character & Word Load (Defensive increment)
-                                linc["source_chars"] = linc.get("source_chars", 0) + len(eng)
-                                linc["source_words"] = linc.get("source_words", 0) + len(eng.split())
-                                
-                                # Punctuation Flux & Musicality
-                                linc["source_punct"] = linc.get("source_punct", 0) + len(re.findall(r'[!.?]', eng))
-                                linc["music_symbols"] = linc.get("music_symbols", 0) + len(re.findall(r'[♪♫#]', eng))
-                                
-                                if not heb:
-                                    linc["empty_subs"] = linc.get("empty_subs", 0) + 1
-                                    if re.search(r"[\[(].*?[\])]", eng):
-                                        linc["sdh_filtered"] = linc.get("sdh_filtered", 0) + 1
-                                else:
-                                    linc["target_chars"] = linc.get("target_chars", 0) + len(heb)
-                                    linc["target_words"] = linc.get("target_words", 0) + len(heb.split())
-                                    linc["target_punct"] = linc.get("target_punct", 0) + len(re.findall(r'[.!?-]', heb))
-                                    if "\n" in heb:
-                                        linc["multiline_subs"] = linc.get("multiline_subs", 0) + 1
-                                        
-                                    # Track Extremes (Longest Target)
-                                    h_len = len(heb)
-                                    h_words = len(heb.split())
-                                    
-                                    # Ensure extreme dicts exist
-                                    if "longest_target_chars" not in linc: linc["longest_target_chars"] = {"index": -1, "value": 0}
-                                    if "longest_target_words" not in linc: linc["longest_target_words"] = {"index": -1, "value": 0}
-                                    
-                                    if h_len > linc["longest_target_chars"]["value"]:
-                                        linc["longest_target_chars"] = {"index": idx, "value": h_len}
-                                    if h_words > linc["longest_target_words"]["value"]:
-                                        linc["longest_target_words"] = {"index": idx, "value": h_words}
-
-                                # Track Extremes (Longest Source)
-                                e_len = len(eng)
-                                e_words = len(eng.split())
-                                
-                                # Ensure extreme dicts exist
-                                if "longest_source_chars" not in linc: linc["longest_source_chars"] = {"index": -1, "value": 0}
-                                if "longest_source_words" not in linc: linc["longest_source_words"] = {"index": -1, "value": 0}
-                                
-                                if e_len > linc["longest_source_chars"]["value"]:
-                                    linc["longest_source_chars"] = {"index": idx, "value": e_len}
-                                if e_words > linc["longest_source_words"]["value"]:
-                                    linc["longest_source_words"] = {"index": idx, "value": e_words}
-
-                            # Engine Reasoning & Trust
-                            if this_attempt_auditor_flagged:
-                                # If we reached here, it means batch_success is True. 
-                                # If it was flagged but succeeded, it was a Judge Approval (or a retry pass).
-                                # We count it as 'Sensitivity' metric.
-                                stats["auditor_false_positives"] = stats.get("auditor_false_positives", 0) + 1
-
-                            if len(attempted_batch_sizes) == 1 and not this_attempt_auditor_flagged:
-                                _inc_by_size(stats["clean_passes_by_size"], current_batch_size)
-                            # ──────────────────────────────────────────────
-
-                            # ── Pipeline Velocity Telemetry ───────────────
-                            pipeline_duration = time.time() - pipeline_start_time
-                            pipeline_velocity = pipeline_load / pipeline_duration if pipeline_duration > 0 else 0
-                            self.ui_queue.put(("pipeline_telemetry", pipeline_velocity))
-                            if self.shared_state:
-                                self.shared_state.update_telemetry(tokens_per_sec=pipeline_velocity)
-                            # ──────────────────────────────────────────────
-
-                            self.ui_queue.put(("batch_success", None))
                             
                             speed_fmt = f"{pipeline_velocity:.2f}" if pipeline_velocity < 10 else f"{pipeline_velocity:.1f}"
                             log(self.log_queue, session_log_file, f"✅ Batch {indices[0]}-{indices[-1]} saved successfully. {speed_fmt}ch/s")
@@ -1097,14 +1034,75 @@ class TranslationEngine:
                                 file_log(session_log_file, f"ERROR: {e}")
                                 batch_diagnostics_logged = True
                             else:
-                                file_log(session_log_file, f"⚠️ Batch retry failure event for {batch_label} (Retry action follows).")
+                                log(self.log_queue, session_log_file, f"⚠️ Batch retry failure event for {batch_label} (Retry action follows). Reason: {e}")
                             
                             if current_batch_size <= 2:
                                 min_batch_failures += 1
                                 if min_batch_failures >= 3:
-                                    log(self.log_queue, session_log_file, "❌ Failed minimal batch size (2) after 3 attempts. Stopping.")
-                                    self.should_stop = True
-                                    break
+                                    log(self.log_queue, session_log_file, "❌ Persistent failure at minimal batch size. Triggering Manual Intervention...")
+                                    
+                                    # Collect English source for the failed batch
+                                    eng_src_for_intervention = []
+                                    for idx in indices:
+                                        # eng_by_index has original text
+                                        eng_src_for_intervention.append({
+                                            "index": idx,
+                                            "timestamp": next(m['timestamp'] for m in original_metadata if m['index'] == idx),
+                                            "text": eng_by_index[idx]
+                                        })
+                                        
+                                    # Build a detailed error message for the human
+                                    reason_for_human = heb_audit_reason if heb_audit_reason else "System Error (AI succeeded but Engine crashed)"
+                                    if "pipeline_velocity" in str(e):
+                                        reason_for_human += " [Internal Bug: 'pipeline_velocity' missing]"
+                                    else:
+                                        reason_for_human += f" [System Error: {str(e)}]"
+
+                                    manual_fix_dict = self._perform_manual_intervention(
+                                        indices, 
+                                        eng_src_for_intervention, 
+                                        received_dict if 'received_dict' in locals() else {}, 
+                                        reason_for_human,
+                                        config.get("scratch_dir", "scratch")
+                                    )
+                                    
+                                    if manual_fix_dict:
+                                        # Success! Inject the manual fix and pretend it was an LLM success
+                                        received_dict = manual_fix_dict
+                                        # Use empty/legacy context for manual fixes
+                                        res_json = {
+                                            "translated_srt": manual_fix_dict,
+                                            "summary": context_state.get('summary'),
+                                            "last_speaker_info": context_state.get('last_speaker_info'),
+                                            "continuity_note": context_state.get('continuity_note')
+                                        }
+                                        
+                                        log(self.log_queue, session_log_file, "✅ Manual Intervention successful. Resuming automated flow...")
+                                        
+                                        # Detailed Audit Trail for File Log
+                                        file_log(session_log_file, f"--- MANUAL INTERVENTION AUDIT (Batch {indices[0]}-{indices[-1]}) ---")
+                                        for m in eng_src_for_intervention:
+                                            idx = m['index']
+                                            file_log(session_log_file, f"IDX {idx} | EN: {m['text']}")
+                                            file_log(session_log_file, f"IDX {idx} | HE (HUMAN): {manual_fix_dict.get(idx, 'MISSING')}")
+                                        file_log(session_log_file, "--------------------------------------------------------")
+                                        
+                                        # --- NEW: Call Finalization logic for Manual Fix ---
+                                        self._finalize_batch_success(
+                                            original_metadata, received_dict, f_out, 
+                                            translated_heb_by_index, res_json, context_state, 
+                                            stats, indices, expected_count, pipeline_load, pipeline_start_time
+                                        )
+
+                                        # Reset failure counters
+                                        min_batch_failures = 0
+                                        failures_at_current_size = 0
+                                        batch_success = True
+                                        continue 
+                                    else:
+                                        log(self.log_queue, session_log_file, "❌ Manual Intervention cancelled or failed. Stopping.")
+                                        self.should_stop = True
+                                        break
                                 log(self.log_queue, session_log_file, f"🔁 Minimal batch (size 2) attempt {min_batch_failures}/3 failed; retrying same size...")
                             else:
                                 failures_at_current_size += 1
@@ -1206,3 +1204,171 @@ class TranslationEngine:
         finally:
             self.ui_queue.put(("finished", None))
             self.ui_queue.put(("refresh", None))
+
+    def _perform_manual_intervention(self, indices, metadata, failed_dict, audit_reason_heb, scratch_dir):
+        """
+        Opens Notepad for the user to manually fix a problematic batch.
+        Blocks the engine thread until Notepad is closed.
+        """
+        fix_file = os.path.join(scratch_dir, "manual_intervention_fix.txt")
+        os.makedirs(scratch_dir, exist_ok=True)
+
+        # 1. Build Template
+        content = [
+            "####### MANUAL INTERVENTION REQUIRED #######",
+            "####### התערבות אנושית נדרשת ################",
+            "# הוראות:",
+            "# 1. ערוך את התרגום בעברית למיטב יכולתך.",
+            "# 2. שמור את הקובץ (Ctrl+S).",
+            "# 3. סגור את Notepad על מנת להמשיך",
+            "############################################",
+            "",
+            "שורות המקור באנגלית",
+            "##############",
+            ""
+        ]
+        
+        for m in metadata:
+            content.append(f"{m['index']}")
+            content.append(f"{m['timestamp']}")
+            content.append(f"{m['text']}")
+            content.append("")
+            
+        content.append("שורות מתורגמות שנדרש בהן תיקון")
+        content.append("אל תשנה את השורות עם המספרים, רק את התרגום")
+        content.append("נסה לסדר שלא יהיו יותר מ-8 מילים בשורה")
+        content.append("השגיאות שאותן הסקריפט זיהה בשורות תרגום אלו הן:")
+        content.append(f"< {audit_reason_heb} >")
+        content.append("##############")
+        content.append("")
+        
+        for m in metadata:
+            idx = m['index']
+            content.append(f"{idx}")
+            content.append(f"{m['timestamp']}")
+            heb_val = failed_dict.get(idx, "")
+            content.append(f"{heb_val}")
+            content.append("")
+            
+        while True:
+            # Write/Overwrite the file
+            with open(fix_file, "w", encoding="utf-8-sig") as f:
+                f.write("\n".join(content))
+                
+            # Alert UI and wait for user's Yes/No decision
+            self.ui_queue.put(("request_intervention", f"{indices[0]}-{indices[-1]}"))
+            
+            # This blocks until the UI thread puts True or False in the queue
+            user_choice = self.intervention_choice_q.get()
+            
+            if not user_choice:
+                log(self.log_queue, None, "🛑 User declined manual intervention. Aborting.")
+                return None
+
+            # 2. Launch Notepad & Wait
+            try:
+                subprocess.run(["notepad.exe", fix_file], check=True)
+            except Exception as e:
+                log(self.log_queue, None, f"⚠️ Failed to launch Notepad: {e}")
+                return None
+
+            # 3. Read back
+            try:
+                with open(fix_file, "r", encoding="utf-8-sig") as f:
+                    updated_content = f.read().replace('\r\n', '\n')
+            except Exception as e:
+                log(self.log_queue, None, f"⚠️ Failed to read intervention file: {e}")
+                return None
+
+            # 4. Parse & Validate
+            success, result, err = self._parse_intervention_file(updated_content, metadata)
+            if success:
+                return result
+            else:
+                # If validation failed, log it and the loop will re-open Notepad
+                log(self.log_queue, None, f"🔍 Format Error: {err}. Re-opening Notepad...")
+                # The while loop will re-open notepad.
+
+    def _parse_intervention_file(self, content, metadata):
+        marker = "שורות מתורגמות שנדרש בהן תיקון"
+        if marker not in content:
+            return False, None, "Marker section missing"
+            
+        # We only care about the text after the marker
+        heb_part = content.split(marker)[-1]
+        
+        results = {}
+        for m in metadata:
+            idx = str(m['index'])
+            ts = m['timestamp'].strip()
+            
+            # Robust Regex: 
+            # 1. Match the Index line
+            # 2. Match the exact Timestamp line
+            # 3. Capture everything until the next index block or section end
+            escaped_ts = re.escape(ts)
+            pattern = rf"(?:^|\n){idx}[ \t]*\n{escaped_ts}[ \t]*\n(.*?)(?=\n\d+[ \t]*\n|\n[#\-_=]|\Z)"
+            
+            match = re.search(pattern, heb_part, re.DOTALL)
+            if not match:
+                return False, None, f"Index {idx} or its timestamp was modified or is missing"
+            
+            results[idx] = match.group(1).strip()
+            
+        return True, results, None
+
+    def _finalize_batch_success(self, original_metadata, received_dict, f_out, 
+                               translated_heb_by_index, res_json, context_state, 
+                               stats, indices, expected_count, pipeline_load, pipeline_start_time):
+        """
+        Shared logic for successful batches (both AI and Manual).
+        Handles file writing, state updates, and telemetry.
+        """
+        translated_lines = []
+        for m in original_metadata:
+            idx = m['index']
+            heb_text = received_dict[idx]
+            translated_lines.append(f"{idx}\n{m['timestamp']}\n{fix_rtl(heb_text)}")
+            # Emit each successful segment for GUI updates.
+            self.ui_queue.put(("segment", (idx, m['timestamp'], m['text'], heb_text)))
+        
+        f_out.write('\n\n'.join(translated_lines) + '\n\n')
+        f_out.flush()
+
+        for m in original_metadata:
+            translated_heb_by_index[m['index']] = fix_rtl(received_dict[m['index']])
+        
+        # Harvest flattened context state from response root
+        context_state['summary'] = res_json.get('summary', context_state.get('summary'))
+        context_state['last_speaker_info'] = res_json.get('last_speaker_info', context_state.get('last_speaker_info'))
+        context_state['continuity_note'] = res_json.get('continuity_note', context_state.get('continuity_note'))
+        if indices:
+            last_idx = indices[-1]
+            context_state['last_two_lines_heb'] = [received_dict[last_idx]]
+
+        # Stats and batch progress
+        stats["processed_total"] = stats.get("processed_total", 0) + expected_count
+        stats["total_batches_succeeded"] += 1
+        
+        # Linguistic Telemetry
+        linc = stats.get("linguistics", {})
+        for m in original_metadata:
+            idx = m['index']
+            eng = m['text']
+            heb = received_dict.get(idx, "").strip()
+            
+            linc["source_chars"] = linc.get("source_chars", 0) + len(eng)
+            linc["source_words"] = linc.get("source_words", 0) + len(eng.split())
+            
+            if heb:
+                linc["target_chars"] = linc.get("target_chars", 0) + len(heb)
+                linc["target_words"] = linc.get("target_words", 0) + len(heb.split())
+
+        # Speed Telemetry
+        pipeline_duration = time.time() - pipeline_start_time
+        pipeline_velocity = pipeline_load / pipeline_duration if pipeline_duration > 0 else 0
+        self.ui_queue.put(("pipeline_telemetry", pipeline_velocity))
+        if self.shared_state:
+            self.shared_state.update_telemetry(tokens_per_sec=pipeline_velocity)
+
+        self.ui_queue.put(("batch_success", None))

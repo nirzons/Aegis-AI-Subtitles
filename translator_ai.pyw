@@ -304,7 +304,8 @@ class TranslatorApp:
             "checkpoint_dir": self.checkpoint_dir,
             "sysprm_dir": self.sysprm_dir,
             "english_subs_dir": self.english_subs_dir,
-            "output_dir": self.output_dir
+            "output_dir": self.output_dir,
+            "scratch_dir": os.path.join(self.curr_dir, "scratch")
         }
 
         if resume_mode:
@@ -499,6 +500,13 @@ class TranslatorApp:
                     self.shared_state.update_timer("")
             elif type == "refresh":
                 self.refresh_files()
+            elif type == "request_intervention":
+                # Show a blocking Yes/No dialog
+                ans = messagebox.askyesno("Manual Intervention Required", 
+                    f"⚠️ Persistent failure in Batch {data}. \n\nWould you like to manually fix these lines in Notepad?\n(Selecting 'No' will terminate the translation)", 
+                    parent=self.root)
+                # Send the response back to the engine
+                self.engine.intervention_choice_q.put(ans)
 
         # Update Web Dashboard Active Clients Label
         if self.ui.widgets.web_gui_var.get():
@@ -574,7 +582,8 @@ class TranslatorApp:
 
     def copy_logs_to_clipboard(self):
         self.root.clipboard_clear()
-        self.root.clipboard_append(self.ui.widgets.log_text.get(1.0, tk.END))
+        self.root.clipboard_append(self.ui.widgets.log_text.get("1.0", tk.END))
+        self.root.update()
         messagebox.showinfo("Copied", "Terminal logs copied!")
 
     def on_closing(self):
