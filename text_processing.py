@@ -217,11 +217,11 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
             else:
                 block_ratio = heb_wc / eng_wc
                 
-            if block_ratio > 2.0:
+            if block_ratio > 3.0:
                 reasons.append(f"Verbosification at index {idx} ({block_ratio:.1f}x)")
                 heb_reasons.append(f"IDX:{idx}|זוהתה חריגה משמעותית באורך התרגום (Verbosification) ביחס למקור ({block_ratio:.1f}x).")
                 has_expansion_anomaly = True
-            elif block_ratio > 1.4:
+            elif block_ratio > 2.0:
                 reasons.append(f"High expansion at index {idx} ({block_ratio:.1f}x)")
                 heb_reasons.append(f"IDX:{idx}|התרגום ארוך יחסית למקור (High expansion) ({block_ratio:.1f}x).")
             elif block_ratio < 0.4 and eng_wc >= 4:
