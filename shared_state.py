@@ -19,6 +19,7 @@ class SharedState:
         self.segments = deque(maxlen=50) # Last 50 items: {idx, time, eng, heb}
         self.upcoming = [] # Next 2 items: {idx, time, eng}
         self.active_clients = 0
+        self.web_port = None  # set by start_web_server after successful port bind
 
         # NEW V3 State Data
         self.telemetry = {

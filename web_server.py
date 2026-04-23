@@ -72,12 +72,23 @@ def create_app(shared_state: SharedState, log_queue=None):
     
     return app
 
+def find_free_port(start=7860, end=7870):
+    """Return the first port in [start, end] that is not currently in use."""
+    import socket
+    for port in range(start, end + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if s.connect_ex(('127.0.0.1', port)) != 0:
+                return port  # port not listening → available
+    return None  # all ports in range are occupied
+
+
 class NoSignalServer(uvicorn.Server):
     """Custom server class that disables signal handling for threaded use."""
     def install_signal_handlers(self) -> None:
         pass
 
-def start_web_server(shared_state: SharedState, host="0.0.0.0", port=7860, log_queue=None):
+def start_web_server(shared_state: SharedState, host="0.0.0.0", port=None, log_queue=None):
     import sys
     import os
     
@@ -86,6 +97,18 @@ def start_web_server(shared_state: SharedState, host="0.0.0.0", port=7860, log_q
     if sys.stderr is None: sys.stderr = open(os.devnull, 'w')
 
     try:
+        # Auto-discover a free port in the 7860-7870 range if none specified
+        if port is None:
+            port = find_free_port(7860, 7870)
+            if port is None:
+                error_msg = "❌ [Web GUI] No free port found in range 7860-7870. Cannot start dashboard."
+                if log_queue:
+                    log_queue.put(error_msg)
+                return
+
+        # Publish the chosen port back to the UI before blocking on server.run()
+        shared_state.web_port = port
+
         # Create and set a new event loop for this thread (required for sub-threads)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -96,7 +119,7 @@ def start_web_server(shared_state: SharedState, host="0.0.0.0", port=7860, log_q
         server = NoSignalServer(config)
         
         if log_queue:
-            log_queue.put(f"🌐 [Web GUI] Server listener starting on http://{host}:{port}")
+            log_queue.put(f"🌐 [Web GUI] Dashboard running → http://localhost:{port}")
             
         # Store server instance in shared_state for graceful shutdown
         shared_state._web_server = server

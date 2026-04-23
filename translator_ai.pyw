@@ -188,13 +188,26 @@ class TranslatorApp:
             # First time enablement check
             if not self.web_server_started:
                 log(self.log_queue, self.session_log_file, "🌐 Initiating Web Dashboard binding...")
-                threading.Thread(target=start_web_server, args=(self.shared_state, "0.0.0.0", 7860, self.log_queue), daemon=True).start()
+                threading.Thread(target=start_web_server, args=(self.shared_state, "0.0.0.0", None, self.log_queue), daemon=True).start()
                 self.web_server_started = True
+                # Give the server thread ~300ms to bind and write web_port, then update the label
+                self.root.after(300, self._update_web_port_label)
             else:
-                log(self.log_queue, self.session_log_file, "🌐 Web Dashboard updates resumed.")
+                port = self.shared_state.web_port or 7860
+                log(self.log_queue, self.session_log_file, f"🌐 Web Dashboard updates resumed. (http://localhost:{port})")
         else:
             log(self.log_queue, self.session_log_file, "🌐 Web Dashboard updates paused.")
                 
+    def _update_web_port_label(self):
+        """Called ~300ms after the web server thread starts to display the actual bound port."""
+        port = self.shared_state.web_port
+        if port:
+            log(self.log_queue, self.session_log_file, f"🌐 Web Dashboard ready → http://localhost:{port}")
+            self.ui.widgets.lbl_web_clients.config(text=f"(:{port})")
+        else:
+            # Server hasn't bound yet — retry once more after another 500ms
+            self.root.after(500, self._update_web_port_label)
+
     def refresh_files(self):
         sysprm_files = sorted([f for f in os.listdir(self.sysprm_dir) if f.lower().endswith('.sysprm')])
         srt_files = sorted([f for f in os.listdir(self.english_subs_dir) if f.endswith('.srt')])
