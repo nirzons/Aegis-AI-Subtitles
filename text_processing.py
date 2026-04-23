@@ -338,15 +338,23 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
             # בדיקת כפילות של ביטוי משמעותי (3 מילים ומעלה)
             wc_last = len([w for w in last_line.split() if any(c.isalnum() for c in w)])
             if last_line == first_line and wc_last >= 3:
-                # בדיקה האם הכפילות קיימת גם במקור (למשל דיאלוג "- כן. - כן.")
-                e1 = str(eng_dict.get(idx1, "")).strip().lower().split('\n')
-                e2 = str(eng_dict.get(idx2, "")).strip().lower().split('\n')
+                # בדיקה האם הכפילות קיימת גם במקור:
+                # Case A: הגבול בין הבלוקים - השורה האחרונה של 1 זהה לראשונה של 2
+                # Case B: כל שורה מבלוק 1 שמופיעה בבלוק 2 (למשל קהל שצועק אותו ביטוי)
+                # Case C: בלוק 2 עצמו מכיל שורות חוזרות (חיזוק/קריאה שמופיעה מספר פעמים)
+                e1 = [RE_ECHO_CLEANER.sub('', l).strip().lower() for l in str(eng_dict.get(idx1, "")).strip().split('\n')]
+                e2 = [RE_ECHO_CLEANER.sub('', l).strip().lower() for l in str(eng_dict.get(idx2, "")).strip().split('\n')]
                 
                 e_repeated = False
                 if e1 and e2:
-                    e_last = RE_ECHO_CLEANER.sub('', e1[-1]).strip()
-                    e_first = RE_ECHO_CLEANER.sub('', e2[0]).strip()
-                    if e_last == e_first and len(e_last.split()) >= 2:
+                    # Case A: last line of block 1 == first line of block 2
+                    if e1[-1] and e2[0] and e1[-1] == e2[0] and len(e1[-1].split()) >= 2:
+                        e_repeated = True
+                    # Case B: any line from block 1 appears anywhere in block 2 (chant/crowd repetition)
+                    elif any(l1 and l1 in e2 and len(l1.split()) >= 2 for l1 in e1):
+                        e_repeated = True
+                    # Case C: block 2 itself has internal repetition (same line appears twice)
+                    elif len(e2) > 1 and len(set(l for l in e2 if l)) < len([l for l in e2 if l]):
                         e_repeated = True
                 
                 if not e_repeated:
