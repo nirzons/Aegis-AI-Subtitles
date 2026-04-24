@@ -30,7 +30,7 @@ from constants import (
     GLOBAL_TECHNICAL_RULES, JSON_SCHEMA_TEMPLATE, JSON_SCHEMA_LITE, RULE_NO_ENGLISH
 )
 
-from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch, force_split_overlong_line
+from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch, force_split_overlong_line, cleanup_failed_translation
 from llm_api import call_llm, call_llm_judge, generate_batch_schema
 from app_utils import log, file_log, format_cost_display, get_eta_string, strip_srt, load_srt_index_to_text, load_srt_full_history, pretty_json
 
@@ -222,6 +222,10 @@ class TranslationEngine:
                 total_main_cost = 0.0
                 total_judge_cost = 0.0
                 log(self.log_queue, session_log_file, f"\n📁 Creating new Checkpoint File: {current_checkpoint_file}")
+
+            # Bypass intervention tracking (only active when config["bypass_intervention"] is True)
+            bypass_log_file = None  # Created on first bypass event
+            bypass_count = 0
 
             # Initial terminal info
             log(self.log_queue, session_log_file, f"📝 Target File: {os.path.basename(srt_file)}")
@@ -1039,24 +1043,67 @@ class TranslationEngine:
                             if current_batch_size <= 2:
                                 min_batch_failures += 1
                                 if min_batch_failures >= 3:
-                                    log(self.log_queue, session_log_file, "❌ Persistent failure at minimal batch size. Triggering Manual Intervention...")
+                                    log(self.log_queue, session_log_file, "❌ Persistent failure at minimal batch size. Triggering intervention...")
                                     
                                     # Collect English source for the failed batch
                                     eng_src_for_intervention = []
                                     for idx in indices:
-                                        # eng_by_index has original text
                                         eng_src_for_intervention.append({
                                             "index": idx,
                                             "timestamp": next(m['timestamp'] for m in original_metadata if m['index'] == idx),
                                             "text": eng_by_index[idx]
                                         })
                                         
-                                    # Build a detailed error message for the human
+                                    # Build a detailed error message
                                     reason_for_human = heb_audit_reason if heb_audit_reason else "System Error (AI succeeded but Engine crashed)"
                                     if "pipeline_velocity" in str(e):
                                         reason_for_human += " [Internal Bug: 'pipeline_velocity' missing]"
                                     else:
                                         reason_for_human += f" [System Error: {str(e)}]"
+
+                                    # ── BYPASS PATH ──────────────────────────────────────────
+                                    if config.get("bypass_intervention"):
+                                        log(self.log_queue, session_log_file,
+                                            f"🚫 [BYPASS] Skipping manual intervention. Auto-cleaning {len(indices)} subtitle(s)...")
+
+                                        bypass_dict = {}
+                                        last_received = received_dict if 'received_dict' in locals() else {}
+                                        for m in eng_src_for_intervention:
+                                            raw_heb = str(last_received.get(m['index'], ""))
+                                            cleaned = cleanup_failed_translation(raw_heb, m['text'], reason_for_human)
+                                            bypass_dict[m['index']] = cleaned
+                                            log(self.log_queue, session_log_file,
+                                                f"   🚫 IDX {m['index']}: {repr(raw_heb)[:60]} → {repr(cleaned)[:60]}")
+
+                                        # Create bypass log on first occurrence
+                                        if bypass_log_file is None:
+                                            bypass_log_file = self._create_bypass_log(session_log_file)
+                                        self._write_bypass_entry(bypass_log_file, eng_src_for_intervention, bypass_dict, reason_for_human)
+                                        bypass_count += 1
+
+                                        received_dict = bypass_dict
+                                        res_json = {
+                                            "translated_srt": bypass_dict,
+                                            "summary": context_state.get('summary'),
+                                            "last_speaker_info": context_state.get('last_speaker_info'),
+                                            "continuity_note": context_state.get('continuity_note')
+                                        }
+
+                                        log(self.log_queue, session_log_file,
+                                            f"🚫 [BYPASS] Auto-cleanup complete for batch {batch_label}. Resuming...")
+
+                                        self._finalize_batch_success(
+                                            original_metadata, received_dict, f_out,
+                                            translated_heb_by_index, res_json, context_state,
+                                            stats, indices, expected_count, pipeline_load, pipeline_start_time
+                                        )
+
+                                        min_batch_failures = 0
+                                        failures_at_current_size = 0
+                                        batch_success = True
+                                        continue
+
+                                    # ── MANUAL INTERVENTION PATH (unchanged) ─────────────────
 
                                     manual_fix_dict = self._perform_manual_intervention(
                                         indices, 
@@ -1198,6 +1245,17 @@ class TranslationEngine:
                 if current_checkpoint_file and os.path.exists(current_checkpoint_file):
                     os.remove(current_checkpoint_file)
                     log(self.log_queue, session_log_file, f"🧹 Cleaned up checkpoint.")
+
+                # ── Bypass end-of-session warning ─────────────────────────────
+                if bypass_count > 0:
+                    bypass_basename = os.path.basename(bypass_log_file) if bypass_log_file else "bypass_review.txt"
+                    banner_line = "⚠️  " * 14
+                    log(self.log_queue, session_log_file, f"\n{banner_line}")
+                    log(self.log_queue, session_log_file,
+                        f"  ⚠️  {bypass_count} SUBTITLE BLOCK(S) WERE AUTO-BYPASSED AND MAY CONTAIN ERRORS  ⚠️")
+                    log(self.log_queue, session_log_file,
+                        f"  📋 Review file: {bypass_basename}")
+                    log(self.log_queue, session_log_file, f"{banner_line}\n")
                 
         except Exception as e:
             log(self.log_queue, config.get("session_log_file"), f"❌ Fatal Error: {e}")
@@ -1372,3 +1430,41 @@ class TranslationEngine:
             self.shared_state.update_telemetry(tokens_per_sec=pipeline_velocity)
 
         self.ui_queue.put(("batch_success", None))
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Bypass Intervention Helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _create_bypass_log(session_log_file: str) -> str:
+        """
+        Creates a dedicated bypass log file next to the session log.
+        Returns the full path to the new file.
+        """
+        base = os.path.splitext(session_log_file)[0]
+        path = f"{base}_BYPASS_REVIEW.txt"
+        with open(path, 'w', encoding='utf-8-sig') as f:
+            f.write("=" * 62 + "\n")
+            f.write("  AEGIS BYPASS LOG — SEGMENTS REQUIRING MANUAL REVIEW\n")
+            f.write("  These subtitles were auto-cleaned after 3 AI failures.\n")
+            f.write("  Open your output SRT file and correct the lines below.\n")
+            f.write("=" * 62 + "\n\n")
+        return path
+
+    @staticmethod
+    def _write_bypass_entry(bypass_log_file: str, eng_src: list, bypass_dict: dict, reason: str):
+        """
+        Appends one bypass event to the bypass log file.
+        eng_src: list of {index, timestamp, text} dicts.
+        bypass_dict: {index: cleaned_heb} mapping.
+        """
+        with open(bypass_log_file, 'a', encoding='utf-8-sig') as f:
+            f.write("\u2500" * 50 + "\n")
+            f.write(f"FAILURE REASON: {reason}\n\n")
+            for m in eng_src:
+                idx = m['index']
+                f.write(f"  [{idx}]  {m['timestamp']}\n")
+                f.write(f"  EN:  {m['text']}\n")
+                f.write(f"  HE:  {bypass_dict.get(idx, '[EMPTY]')}\n\n")
+            f.write("\n")

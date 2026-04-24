@@ -198,6 +198,26 @@ class TranslatorApp:
         else:
             log(self.log_queue, self.session_log_file, "🌐 Web Dashboard updates paused.")
                 
+    def toggle_bypass_intervention(self):
+        """Toggles bypass intervention mode. Enabling requires explicit user acknowledgement."""
+        if self.ui.widgets.bypass_intervention_var.get():
+            ans = messagebox.askyesno(
+                "⚠️ Enable Bypass Intervention Mode",
+                "By enabling 'Bypass Intervention', the engine will automatically use a "
+                "cleaned-up version of a failed AI output instead of pausing for manual correction.\n\n"
+                "⚠️ This WILL introduce translation errors into your output file.\n\n"
+                "A dedicated bypass log will be created so you can review and fix affected "
+                "segments after the session ends.\n\n"
+                "Do you understand and wish to proceed?",
+                parent=self.root
+            )
+            if not ans:
+                self.ui.widgets.bypass_intervention_var.set(False)
+                return
+            log(self.log_queue, self.session_log_file, "🚫 [BYPASS] Bypass Intervention Mode ENABLED — errors will be auto-logged.")
+        else:
+            log(self.log_queue, self.session_log_file, "🚫 [BYPASS] Bypass Intervention Mode DISABLED.")
+
     def _update_web_port_label(self):
         """Called ~300ms after the web server thread starts to display the actual bound port."""
         port = self.shared_state.web_port
@@ -318,7 +338,9 @@ class TranslatorApp:
             "sysprm_dir": self.sysprm_dir,
             "english_subs_dir": self.english_subs_dir,
             "output_dir": self.output_dir,
-            "scratch_dir": os.path.join(self.curr_dir, "scratch")
+            "scratch_dir": os.path.join(self.curr_dir, "scratch"),
+            "bypass_intervention": self.ui.widgets.bypass_intervention_var.get(),
+            "logs_dir": self.logs_dir
         }
 
         if resume_mode:

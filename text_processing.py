@@ -448,3 +448,78 @@ def pre_audit_source(eng_dict, illegal_labels=None):
             warnings.append((idx, msg))
             
     return warnings
+
+
+# Pre-compiled regexes for cleanup_failed_translation (module-level for performance)
+_RE_HTML_STRIP   = re.compile(r'<[^>]+>')
+_RE_LATIN_STRIP  = re.compile(r'[a-zA-Z]+')
+_RE_SDH_NON_HEB  = re.compile(r'[\[\(][^\u05d0-\u05ea\n\r]{0,60}[\]\)]')  # SDH brackets with no Hebrew content
+
+
+def cleanup_failed_translation(heb_text: str, eng_text: str, failure_reason: str) -> str:
+    """
+    Attempts to salvage a failed Hebrew subtitle translation using a targeted
+    cleanup pipeline. Called by the Bypass Intervention path when the AI fails
+    3 consecutive times and manual intervention is disabled.
+
+    Strategies applied (in order):
+      1. Always:  Strip all HTML/formatting tags (<i>, <b>, <font ...>)
+      2. Always:  Strip Latin characters (A-Z, a-z) — fixes English leak
+      3. Always:  Strip SDH brackets [ ] / ( ) that contain no Hebrew
+      4. Always:  Normalize whitespace; drop blank lines
+      5. Targeted: Verbosification → truncate to max 2 lines × 8 words
+      6. Targeted: Echo → deduplicate repeated lines
+      7. Targeted: Silent Skip / omission → if still empty, write a "[תרגום חסר]" placeholder
+      8. Safety:  If completely empty after all steps → "[...]"
+
+    Args:
+        heb_text:       Last AI-produced Hebrew translation (may be garbled).
+        eng_text:       Original English source (used for word-count placeholder).
+        failure_reason: The heuristic/judge reason string from the audit.
+
+    Returns:
+        Best-effort cleaned Hebrew string.
+    """
+    result = str(heb_text or "")
+
+    # 1. Strip HTML tags
+    result = _RE_HTML_STRIP.sub('', result)
+
+    # 2. Strip Latin characters
+    result = _RE_LATIN_STRIP.sub('', result)
+
+    # 3. Strip SDH brackets that have no Hebrew inside
+    result = _RE_SDH_NON_HEB.sub('', result)
+
+    # 4. Normalize: collapse multiple spaces / tabs; drop blank lines
+    result = re.sub(r'[ \t]+', ' ', result)
+    lines = [l.strip() for l in result.split('\n') if l.strip()]
+    result = '\n'.join(lines)
+
+    # 5. Targeted: Verbosification — truncate to 2 lines of ≤ 8 words each
+    reason_lower = failure_reason.lower()
+    if 'verbosification' in reason_lower or 'high expansion' in reason_lower:
+        trimmed = []
+        for line in result.split('\n')[:2]:        # keep at most 2 lines
+            words = line.split()
+            trimmed.append(' '.join(words[:8]))    # max 8 words per line
+        result = '\n'.join(t for t in trimmed if t)
+
+    # 6. Targeted: Echo — remove duplicate lines
+    elif 'echo' in reason_lower:
+        seen = []
+        for line in result.split('\n'):
+            if line not in seen:
+                seen.append(line)
+        result = '\n'.join(seen)
+
+    # 7. Targeted: omission / silent skip — supply a labelled placeholder
+    if (not result.strip()) and ('omission' in reason_lower or 'silent skip' in reason_lower):
+        eng_wc = len([w for w in eng_text.split() if any(c.isalnum() for c in w)])
+        result = f"[תרגום חסר — {eng_wc} מילים]"
+
+    # 8. Final safety — guarantee non-empty output
+    if not result.strip():
+        result = "[...]"
+
+    return result.strip()

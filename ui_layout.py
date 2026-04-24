@@ -107,6 +107,14 @@ class MainUILayout:
         self.widgets.lbl_web_clients = tk.Label(progress_header, text="", font=("Segoe UI", 8, "italic"), fg="#3498db", bg=self.root["bg"])
         self.widgets.lbl_web_clients.pack(side=tk.LEFT, padx=5)
 
+        self.widgets.bypass_intervention_var = tk.BooleanVar(value=False)
+        self.widgets.chk_bypass_intervention = ttk.Checkbutton(
+            progress_header, text="🚫 Bypass Intervention",
+            variable=self.widgets.bypass_intervention_var,
+            command=app.toggle_bypass_intervention
+        )
+        self.widgets.chk_bypass_intervention.pack(side=tk.LEFT, padx=20)
+
         progress_frame = ttk.LabelFrame(self.root, labelwidget=progress_header)
         progress_frame.pack(fill=tk.X, padx=15, pady=5)
 
