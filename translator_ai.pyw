@@ -132,7 +132,7 @@ class TranslatorApp:
         
         # Calculate and show immediate ETA from checkpoint stats
         elapsed = stats.get("total_elapsed_seconds", 0.0)
-        time_str, finish_str, eta_secs = get_eta_string(elapsed, processed, processed, total)
+        time_str, finish_str, eta_secs = get_eta_string(elapsed, processed, total)
         
         self.total_eta_seconds = eta_secs
         self.last_finish_time_str = finish_str
@@ -535,6 +535,11 @@ class TranslatorApp:
                     self.shared_state.update_timer("")
             elif type == "refresh":
                 self.refresh_files()
+            elif type == "intervention_count":
+                if data > 0:
+                    self.ui.widgets.lbl_interventions.config(text=f"({data})")
+                else:
+                    self.ui.widgets.lbl_interventions.config(text="")
             elif type == "request_intervention":
                 # Show a blocking Yes/No dialog
                 ans = messagebox.askyesno("Manual Intervention Required", 

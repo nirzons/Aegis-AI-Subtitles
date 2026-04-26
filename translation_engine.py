@@ -348,6 +348,18 @@ class TranslationEngine:
             with open(srt_file, 'r', encoding='utf-8-sig') as f:
                 srt_content = f.read()
 
+            # --- Sanity Check ---
+            from app_utils import validate_srt_file
+            is_valid, srt_errors = validate_srt_file(srt_file)
+            if not is_valid:
+                log(self.log_queue, session_log_file, "❌ FATAL: Source SRT file failed sanity check!")
+                for err in srt_errors:
+                    log(self.log_queue, session_log_file, f"  ! {err}")
+                log(self.log_queue, session_log_file, "🛑 Translation aborted. Please fix the SRT file errors listed above.")
+                self.ui_queue.put(("finished", None))
+                return
+            # --------------------
+
             srt_content = srt_content.replace('\r\n', '\n')
             blocks = srt_content.strip().split('\n\n')
             total_blocks = len(blocks)
@@ -357,10 +369,12 @@ class TranslationEngine:
             for b in blocks:
                 lines_b = b.split('\n')
                 if len(lines_b) >= 2:
-                    idx_b = lines_b[0].strip()
+                    # Sanitize index (strip BOM/whitespace)
+                    idx_b = lines_b[0].strip().replace('\ufeff', '')
                     text_b = "\n".join([l.strip() for l in lines_b[2:]]).strip()
                     eng_by_index[idx_b] = text_b
                     ordered_srt_indices.append(idx_b)
+
 
             if resume_mode:
                 translated_heb_by_index = load_srt_index_to_text(output_file)
@@ -411,6 +425,15 @@ class TranslationEngine:
             # Capture elapsed time accumulated in previous sessions
             elapsed_at_session_start = stats["total_elapsed_seconds"]
             session_start_time = time.time()
+
+            def push_eta():
+                """Push a fresh ETA to both GUIs. Reads current processed/elapsed at call time."""
+                if processed > 0:
+                    t = elapsed_at_session_start + (time.time() - session_start_time)
+                    time_str, finish_str, eta_secs = get_eta_string(t, processed, total_blocks)
+                    self.ui_queue.put(("eta", (time_str, finish_str, eta_secs)))
+                    if self.shared_state:
+                        self.shared_state.update_eta(time_str, finish_str)
             # ─────────────────────────────────────────────────────────────
 
             start_time = time.time()
@@ -421,6 +444,8 @@ class TranslationEngine:
             self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
             if self.shared_state:
                 self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
+            if stats.get("total_interventions", 0) > 0:
+                self.ui_queue.put(("intervention_count", stats["total_interventions"]))
 
             log(self.log_queue, session_log_file, f"🚀 Starting Protected AI Translation with {model_cfg['provider']}")
             
@@ -922,6 +947,7 @@ class TranslationEngine:
                                     debug_mode=getattr(self, 'debug_mode', False)
                                 )
                                 self.ui_queue.put(("judge_stop", None))
+                                push_eta()  # ETA rises to reflect judge audit time
 
                                 # ── Track judge activity ───────────────────
                                 _inc_by_size(stats["judge_invocations"], current_batch_size)
@@ -1039,12 +1065,16 @@ class TranslationEngine:
                                 batch_diagnostics_logged = True
                             else:
                                 log(self.log_queue, session_log_file, f"⚠️ Batch retry failure event for {batch_label} (Retry action follows). Reason: {e}")
+                                push_eta()  # ETA rises to reflect time lost on this failure
                             
                             if current_batch_size <= 2:
                                 min_batch_failures += 1
                                 if min_batch_failures >= 3:
                                     log(self.log_queue, session_log_file, "❌ Persistent failure at minimal batch size. Triggering intervention...")
                                     
+                                    stats["total_interventions"] = stats.get("total_interventions", 0) + 1
+                                    self.ui_queue.put(("intervention_count", stats["total_interventions"]))
+
                                     # Collect English source for the failed batch
                                     eng_src_for_intervention = []
                                     for idx in indices:
@@ -1211,7 +1241,7 @@ class TranslationEngine:
                             json.dump(checkpoint_data, ckpt_f, ensure_ascii=False, indent=4)
                     
                     total_elapsed = stats.get("total_elapsed_seconds", 0.0)
-                    time_str, finish_str, eta_secs = get_eta_string(total_elapsed, processed, processed, total_blocks)
+                    time_str, finish_str, eta_secs = get_eta_string(total_elapsed, processed, total_blocks)
 
                     self.ui_queue.put(("progress", (processed, total_blocks)))
                     self.ui_queue.put(("eta", (time_str, finish_str, eta_secs)))

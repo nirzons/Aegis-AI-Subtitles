@@ -115,6 +115,9 @@ class MainUILayout:
         )
         self.widgets.chk_bypass_intervention.pack(side=tk.LEFT, padx=20)
 
+        self.widgets.lbl_interventions = tk.Label(progress_header, text="", font=("Segoe UI", 8, "italic"), fg="#e74c3c", bg=self.root["bg"])
+        self.widgets.lbl_interventions.pack(side=tk.LEFT, padx=5)
+
         progress_frame = ttk.LabelFrame(self.root, labelwidget=progress_header)
         progress_frame.pack(fill=tk.X, padx=15, pady=5)
 
