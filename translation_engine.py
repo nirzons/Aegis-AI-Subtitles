@@ -1092,7 +1092,7 @@ class TranslationEngine:
                                         reason_for_human += f" [System Error: {str(e)}]"
 
                                     # ── BYPASS PATH ──────────────────────────────────────────
-                                    if config.get("bypass_intervention"):
+                                    if getattr(self, 'bypass_intervention', False):
                                         log(self.log_queue, session_log_file,
                                             f"🚫 [BYPASS] Skipping manual intervention. Auto-cleaning {len(indices)} subtitle(s)...")
 
@@ -1134,7 +1134,8 @@ class TranslationEngine:
                                         continue
 
                                     # ── MANUAL INTERVENTION PATH (unchanged) ─────────────────
-
+                                    
+                                    intervention_start_t = time.time()
                                     manual_fix_dict = self._perform_manual_intervention(
                                         indices, 
                                         eng_src_for_intervention, 
@@ -1142,7 +1143,10 @@ class TranslationEngine:
                                         reason_for_human,
                                         config.get("scratch_dir", "scratch")
                                     )
+                                    intervention_duration = time.time() - intervention_start_t
+                                    session_start_time += intervention_duration # Exclude from ETA
                                     
+
                                     if manual_fix_dict:
                                         # Success! Inject the manual fix and pretend it was an LLM success
                                         received_dict = manual_fix_dict

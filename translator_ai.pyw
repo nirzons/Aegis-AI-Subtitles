@@ -215,8 +215,12 @@ class TranslatorApp:
                 self.ui.widgets.bypass_intervention_var.set(False)
                 return
             log(self.log_queue, self.session_log_file, "🚫 [BYPASS] Bypass Intervention Mode ENABLED — errors will be auto-logged.")
+            if hasattr(self, 'engine'):
+                self.engine.bypass_intervention = True
         else:
             log(self.log_queue, self.session_log_file, "🚫 [BYPASS] Bypass Intervention Mode DISABLED.")
+            if hasattr(self, 'engine'):
+                self.engine.bypass_intervention = False
 
     def _update_web_port_label(self):
         """Called ~300ms after the web server thread starts to display the actual bound port."""
@@ -297,20 +301,43 @@ class TranslatorApp:
         # Config gathering
         model_idx = self.ui.widgets.model_var.get().split(" - ")[0]
         judge_idx = self.ui.widgets.judge_model_var.get().split(" - ")[0]
-        model_cfg = SETTINGS.config["models"].get(model_idx)
-        judge_cfg = SETTINGS.config["models"].get(judge_idx) or model_cfg
+        model_cfg = SETTINGS.config["models"].get(model_idx).copy()
+        judge_cfg = (SETTINGS.config["models"].get(judge_idx) or model_cfg).copy()
         
-        # 1. API Key Validation
+        # Inject API keys into configs for the ping test
         api_key = SETTINGS.config["api_keys"].get(model_cfg['provider'])
         judge_api_key = SETTINGS.config["api_keys"].get(judge_cfg['provider'])
-        
+        model_cfg['api_key'] = api_key
+        judge_cfg['api_key'] = judge_api_key
+
+        # 1. Basic Key Presence Validation
         if not api_key:
             messagebox.showerror("Key Missing", f"API Key for '{model_cfg['provider'].upper()}' is missing.\n\nPlease click the ⚙️ Settings button to enter your key.")
             return
-
         if not judge_api_key:
             messagebox.showerror("Key Missing", f"API Key for Judge Provider '{judge_cfg['provider'].upper()}' is missing.\n\nPlease click the ⚙️ Settings button to enter your key.")
             return
+
+        # --- Pre-Flight Connectivity Checks ---
+        from llm_api import ping_model
+        log(self.log_queue, getattr(self, 'session_log_file', None), f"🔌 Testing connectivity for {model_cfg.get('name', 'Main Model')}...")
+        ok, msg = ping_model(model_cfg)
+        if not ok:
+            messagebox.showerror("Connectivity Error (Main Model)", msg, parent=self.root)
+            log(self.log_queue, getattr(self, 'session_log_file', None), f"❌ Pre-flight check FAILED: {msg}")
+            return
+            
+        # 2. Judge Model Ping (if different)
+        if judge_idx != model_idx:
+            log(self.log_queue, getattr(self, 'session_log_file', None), f"🔌 Testing connectivity for Judge ({judge_cfg.get('name', 'Judge')})...")
+            ok, msg = ping_model(judge_cfg)
+            if not ok:
+                messagebox.showerror("Connectivity Error (Judge Model)", msg, parent=self.root)
+                log(self.log_queue, getattr(self, 'session_log_file', None), f"❌ Pre-flight check (Judge) FAILED: {msg}")
+                return
+        
+        log(self.log_queue, getattr(self, 'session_log_file', None), "✅ All models reached successfully. Initializing engine...")
+        # --------------------------------------
 
         # 2. File Selection Validation
 
@@ -350,6 +377,7 @@ class TranslatorApp:
         # Launch Engine
         self.is_running = True
         self.engine.should_stop = False
+        self.engine.bypass_intervention = self.ui.widgets.bypass_intervention_var.get()
         self._toggle_ui_state(tk.DISABLED)
         
         # In Hot Resume mode, don't wipe the terminal. Add a separator instead.

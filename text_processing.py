@@ -224,9 +224,9 @@ def check_heuristics(eng_dict, heb_dict, illegal_labels=None):
             elif block_ratio > 2.0:
                 reasons.append(f"High expansion at index {idx} ({block_ratio:.1f}x)")
                 heb_reasons.append(f"IDX:{idx}|התרגום ארוך יחסית למקור (High expansion) ({block_ratio:.1f}x).")
-            elif block_ratio < 0.4 and eng_wc >= 4:
+            elif block_ratio < 0.35 and eng_wc >= 6:
                 reasons.append(f"Extreme omission at index {idx} ({block_ratio:.1f}x)")
-                heb_reasons.append(f"IDX:{idx}|התרגום קצר משמעותית מאורך המקור (Extreme omission) ({block_ratio:.1f}x).")
+                heb_reasons.append(f"IDX:{idx}|חשד להשמטת טקסט - התרגום קצר משמעותית מהמקור ({block_ratio:.1f}x). ודא שלא הושמט מידע עלילתי. זכור: עברית מטבעה דחוסה יותר מאנגלית (מילות יחס כמו in/to/that הופכות לקידומות ב/ל/ש) לכן יחס נמוך הוא לרוב תקין לחלוטין.")
 
         # 1. בדיקת "דילוג שקט" (Hebrew empty but Eng not)
         # אם אחרי שניקינו את ה-SDH ואת סימני הפיסוק לא נשאר כלום - זה אינדקס SDH טהור

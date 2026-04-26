@@ -39,6 +39,53 @@ def is_process_alive(pid):
             return True
 
 
+def ping_model(model_cfg):
+    """
+    Minimal connectivity check for a given model configuration.
+    Returns (True, "OK") or (False, "Error message").
+    """
+    if not model_cfg:
+        return False, "No model configuration provided."
+    
+    provider = model_cfg.get("provider", "openai")
+    api_key = model_cfg.get("api_key", "")
+    base_url = model_cfg.get("base_url", "")
+    model_name = model_cfg.get("name", "")
+
+    if provider == "deepseek" and not base_url:
+        base_url = "https://api.deepseek.com"
+
+    try:
+        if provider == "google":
+            client = genai.Client(api_key=api_key)
+            # Try a very simple generate_content call
+            client.models.generate_content(
+                model=model_name,
+                contents="ping",
+                config=types.GenerateContentConfig(max_output_tokens=1)
+            )
+            return True, "OK"
+        else:
+            # OpenAI / LM Studio / Groq
+            client = OpenAI(api_key=api_key or "sk-no-key-required", base_url=base_url or None)
+            client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                timeout=10 # Short timeout for pre-flight
+            )
+            return True, "OK"
+    except Exception as e:
+        err_msg = str(e)
+        if "400" in err_msg and "No models loaded" in err_msg:
+            return False, "LM Studio is running, but no model is loaded. Please load a model in LM Studio."
+        if "Connection error" in err_msg or "Failed to connect" in err_msg:
+            return False, f"Could not connect to {provider} at {base_url or 'default endpoint'}. Is the server running?"
+        if "401" in err_msg or "Incorrect API key" in err_msg:
+            return False, f"Invalid API key for {provider}. Please check your settings."
+        return False, f"{provider} Error: {err_msg}"
+
+
 
 def generate_batch_schema(indices_list, use_scratchpad=True):
     """Generates a dynamic JSON schema for primary translation."""
@@ -474,7 +521,7 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
 
             if relevant_reasons:
                 reasons_text = "\n".join(relevant_reasons)
-                user_prompt += f"\n### התראת מערכת אוטומטית (Audit): ###\n{reasons_text}\nשים לב: אלגוריתם הבדיקה זיהה את השגיאה הנ\"ל פיזית בתוך שדה התרגום_עברית. קרא את האינדקס המדובר בשדה התרגום שוב בעיון רב כדי לאמת זאת. אל תתעלם מהתראה זו, היא כנראה נכונה!\n"
+                user_prompt += f"\n### התראת מערכת אוטומטית (Audit): ###\n{reasons_text}\nשים לב: אלגוריתם אוטומטי זיהה חשד לשגיאה הנ\"ל. קרא את האינדקס המדובר בעיון רב. הפעל שיקול דעת עצמאי לחלוטין - ייתכן שהאלגוריתם טועה (למשל בהבדלי אורך טבעיים בין אנגלית לעברית). פסול אך ורק אם מצאת שגיאה אמיתית ומהותית במו עיניך.\n"
 
         user_prompt += "### סוף נתונים ###\n"
         user_prompt += "\nאזהרה אחרונה: פסול את הבאץ' (is_rejected: true) אם אתה רואה את השגיאה במו עיניך בתוך שדה התרגום (תרגום_עברית). אל תפסול אם השגיאה מופיעה אך ורק במקור (מקור_אנגלית).\n"
@@ -542,7 +589,10 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
                     pretty_res = raw_res
                 file_log_func(f"--- JUDGE CHUNK {idx+1} RAW RESPONSE START ---\n{pretty_res}\n--- JUDGE CHUNK {idx+1} RAW RESPONSE END ---")
 
-            if not raw_res: continue
+            if not raw_res: 
+                if log_func: log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED (Empty LLM Response)")
+                is_overall_valid = False
+                break
 
             # Parse
             parsed = {}
@@ -551,9 +601,16 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
             except:
                 match = RE_FALLBACK_JSON.search(raw_res)
                 if match:
-                    try: parsed = json.loads(pre_repair_json(match.group(0)))
-                    except: continue
-                else: continue
+                    try: 
+                        parsed = json.loads(pre_repair_json(match.group(0)))
+                    except: 
+                        if log_func: log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED (JSON Parse Failed)")
+                        is_overall_valid = False
+                        break
+                else: 
+                    if log_func: log_func(f"   ↳ ❌ Judge Chunk {idx+1}: REJECTED (No JSON Object Found)")
+                    is_overall_valid = False
+                    break
 
             # Check rejection
             is_rejected = parsed.get('is_rejected', False)
