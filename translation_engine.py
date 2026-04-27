@@ -22,6 +22,10 @@ RE_NEWLINE_CLEANUP = re.compile(r'\s*\\+[nננ]\s*')
 RE_ITALIC_S = re.compile(r'^<i>(?P<c>[^<>\n]*(?:\n[^<>\n]*)*)</i>$')
 RE_ITALIC_D = re.compile(r'^<i>(?P<c1>[^<>\n]*)</i>\n<i>(?P<c2>[^<>\n]*)</i>$')
 
+# Alignment Passthrough: Support for {\anX} and {anX} at the start of blocks.
+# Matches {anX} or {\anX} where X is 1-9.
+RE_ALIGNMENT = re.compile(r'^\{(?P<bs>\\)?an(?P<pos>[1-9])\}(?P<rest>.*)', re.DOTALL)
+
 import threading
 from constants import (
     STEP_HEADER, STEP_READ_CONTEXT, STEP_CONTINUOUS_DRAFT, STEP_MAPPING_PLAN, 
@@ -547,19 +551,34 @@ class TranslationEngine:
                             if RE_SDH_PUNCT.fullmatch(txt):
                                 input_payload[idx] = ""
 
-                        # --- Italic Passthrough: Pre-Processing ---
-                        # We identify subtitles entirely wrapped in <i>...</i>
-                        # We strip them to make the LLM's job easier and prevent \nt artifacts.
-                        # Rule: Only strip if the ENTIRE block is italicized (1 or 2 lines).
-                        # We use anchored regex to ensure no text exists outside the tags.
+                        # --- Tag Passthrough: Pre-Processing ---
+                        # We identify and strip special tags to simplify the LLM payload.
                         batch_italic_indices = set()
+                        batch_alignment_map = {} # stores {line_idx: pos} for each subtitle index
                         final_input_payload = {}
                         
                         for idx, txt in input_payload.items():
-                            stripped_txt = txt.strip()
+                            lines = txt.split('\n')
+                            cleaned_lines = []
+                            subtitle_aligns = {}
                             
-                            match_s = RE_ITALIC_S.match(stripped_txt)
-                            match_d = RE_ITALIC_D.match(stripped_txt)
+                            for i, line in enumerate(lines):
+                                l_strip = line.strip()
+                                align_match = RE_ALIGNMENT.match(l_strip)
+                                if align_match:
+                                    subtitle_aligns[i] = align_match.group('pos')
+                                    cleaned_lines.append(align_match.group('rest').strip())
+                                else:
+                                    cleaned_lines.append(line)
+                            
+                            if subtitle_aligns:
+                                batch_alignment_map[idx] = subtitle_aligns
+                            
+                            current_txt = '\n'.join(cleaned_lines).strip()
+
+                            # 2. Italic Strip: Check for <i>...</i>
+                            match_s = RE_ITALIC_S.match(current_txt)
+                            match_d = RE_ITALIC_D.match(current_txt)
                             
                             if match_s:
                                 # Case 1: Single wrap (even if multi-line)
@@ -567,12 +586,11 @@ class TranslationEngine:
                                 batch_italic_indices.add(idx)
                             elif match_d:
                                 # Case 2: Double wrap (each line has its own pair)
-                                # We preserve the newline but strip all outer tags
                                 final_input_payload[idx] = f"{match_d.group('c1').strip()}\n{match_d.group('c2').strip()}"
                                 batch_italic_indices.add(idx)
                             else:
-                                # Case 3: Mixed text or complex tags - leave As-Is
-                                final_input_payload[idx] = txt
+                                # Case 3: Mixed text or complex tags - leave current_txt (which might have had align stripped)
+                                final_input_payload[idx] = current_txt
                                 
                         if batch_italic_indices and getattr(self, 'debug_mode', False):
                             log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Stripped outer italics for indices: {', '.join(sorted(batch_italic_indices))}")
@@ -807,13 +825,8 @@ class TranslationEngine:
                                 
                                 # Case B: Should NOT have italics (Hallucination removal)
                                 else:
-                                    # Only strip if the original source had ZERO italics.
-                                    # If the source had italics in the middle, we don't want to blindly 
-                                    # strip outer <i> added by the LLM as it might be intentional wrapping.
                                     source_text = str(input_payload.get(idx, ""))
                                     if "<i>" not in source_text:
-                                        # Use regex to strip outer <i>...</i> only if they're perfectly wrapping the content
-                                        # This handles cases like <i>...<i>...</i>...</i> correctly.
                                         match = re.match(r"^<i>(.*)</i>$", heb_text, re.DOTALL)
                                         if match:
                                             received_dict[idx] = match.group(1).strip()
@@ -822,6 +835,32 @@ class TranslationEngine:
                             if (it_restored > 0 or it_stripped > 0) and getattr(self, 'debug_mode', False):
                                 log_msg = f"✨ [Italic Passthrough] Enforcement: Restored {it_restored} | Stripped hallucinated {it_stripped}"
                                 log(self.log_queue, session_log_file, log_msg)
+
+                            # --- Alignment Passthrough: Restoration ---
+                            al_restored = 0
+                            for idx in indices:
+                                if idx in batch_alignment_map:
+                                    subtitle_aligns = batch_alignment_map[idx]
+                                    heb_text = received_dict[idx]
+                                    h_lines = heb_text.split('\n')
+                                    
+                                    # Case A: Line count matches perfectly
+                                    if len(h_lines) >= max(subtitle_aligns.keys()) + 1:
+                                        for line_idx, pos in subtitle_aligns.items():
+                                            h_lines[line_idx] = f"{{\\an{pos}}}{h_lines[line_idx]}"
+                                            al_restored += 1
+                                        received_dict[idx] = '\n'.join(h_lines)
+                                    
+                                    # Case B: Line count mismatch (e.g. LLM merged lines)
+                                    # Prepend unique alignment tags to the first line
+                                    else:
+                                        unique_pos = sorted(list(set(subtitle_aligns.values())))
+                                        tags = "".join([f"{{\\an{p}}}" for p in unique_pos])
+                                        received_dict[idx] = f"{tags}{heb_text}"
+                                        al_restored += len(unique_pos)
+                            
+                            if al_restored > 0 and getattr(self, 'debug_mode', False):
+                                log(self.log_queue, session_log_file, f"✨ [Alignment Passthrough] Restored {{\\anX}} for {al_restored} lines.")
 
                             changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file)
 
