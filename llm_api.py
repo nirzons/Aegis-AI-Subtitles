@@ -442,7 +442,7 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
                           any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
                           (judge_model_cfg.get('provider') == 'lmstudio')
 
-    system_prompt = f"""אתה אודיטור QA חסר רחמים. תפקידך למצוא שגיאות טכניות בתרגום כתוביות (עונה 42 של הישרדות).
+    system_prompt = f"""אתה אודיטור QA חסר רחמים. תפקידך למצוא שגיאות טכניות בתרגום כתוביות.
 נתון לך גם בלוק של כתוביות חופפות לצורך הקשר בלבד - אל תבצע עליו ביקורת!
 
 ### חוקי הפסילה (אם אחד מהם מתקיים, עליך לפסול את הבאץ'): ###
