@@ -1443,18 +1443,40 @@ class TranslationEngine:
         stats["total_batches_succeeded"] += 1
         
         # Linguistic Telemetry
-        linc = stats.get("linguistics", {})
+        linc = stats.setdefault("linguistics", {})
         for m in original_metadata:
             idx = m['index']
             eng = m['text']
             heb = received_dict.get(idx, "").strip()
             
+            # Basic counters
+            eng_wc = len(eng.split())
+            heb_wc = len(heb.split())
             linc["source_chars"] = linc.get("source_chars", 0) + len(eng)
-            linc["source_words"] = linc.get("source_words", 0) + len(eng.split())
+            linc["source_words"] = linc.get("source_words", 0) + eng_wc
             
-            if heb:
+            # Punctuation & Symbols
+            linc["source_punct"] = linc.get("source_punct", 0) + sum(1 for c in eng if c in '.,!?;:"-()[]')
+            linc["music_symbols"] = linc.get("music_symbols", 0) + eng.count('♪')
+
+            if not heb:
+                linc["empty_subs"] = linc.get("empty_subs", 0) + 1
+            else:
                 linc["target_chars"] = linc.get("target_chars", 0) + len(heb)
-                linc["target_words"] = linc.get("target_words", 0) + len(heb.split())
+                linc["target_words"] = linc.get("target_words", 0) + heb_wc
+                linc["target_punct"] = linc.get("target_punct", 0) + sum(1 for c in heb if c in '.,!?;:"-()[]')
+                if '\n' in heb:
+                    linc["multiline_subs"] = linc.get("multiline_subs", 0) + 1
+
+            # Longest segments tracking
+            if len(eng) > linc.get("longest_source_chars", {}).get("value", 0):
+                linc["longest_source_chars"] = {"index": idx, "value": len(eng)}
+            if eng_wc > linc.get("longest_source_words", {}).get("value", 0):
+                linc["longest_source_words"] = {"index": idx, "value": eng_wc}
+            if len(heb) > linc.get("longest_target_chars", {}).get("value", 0):
+                linc["longest_target_chars"] = {"index": idx, "value": len(heb)}
+            if heb_wc > linc.get("longest_target_words", {}).get("value", 0):
+                linc["longest_target_words"] = {"index": idx, "value": heb_wc}
 
         # Speed Telemetry
         pipeline_duration = time.time() - pipeline_start_time

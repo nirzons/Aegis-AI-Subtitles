@@ -76,28 +76,24 @@ def make_stats(resume_from=None):
     Returns:
         A fully-populated stats dict ready for use.
     """
+    import json
     if resume_from is None:
-        # Deep-copy so callers can't mutate the template
-        s = {}
-        for k, v in EMPTY_STATS.items():
-            s[k] = type(v)() if isinstance(v, (dict, list)) else v
-        return s
+        # Deep-copy via JSON to ensure all nested structures are fresh but fully populated
+        return json.loads(json.dumps(EMPTY_STATS))
 
     # Resume: backfill any missing keys or nested dict entries
-    s = dict(resume_from)
+    s = json.loads(json.dumps(resume_from))  # Deep-copy incoming stats
     for k, v in EMPTY_STATS.items():
         if k not in s:
             # Entirely missing top-level key
-            s[k] = type(v)() if isinstance(v, (dict, list)) else v
-            if isinstance(v, dict):
-                s[k].update(v)
+            s[k] = json.loads(json.dumps(v)) if isinstance(v, (dict, list)) else v
         elif isinstance(v, dict) and isinstance(s[k], dict):
             # Nested dictionary backfill
             for sub_k, sub_v in v.items():
                 if sub_k not in s[k]:
                     s[k][sub_k] = sub_v
 
-    s["resume_count"] += 1
+    s["resume_count"] = s.get("resume_count", 0) + 1
     return s
 
 
