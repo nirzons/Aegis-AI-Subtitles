@@ -65,8 +65,19 @@ def ping_model(model_cfg):
                 config=types.GenerateContentConfig(max_output_tokens=1)
             )
             return True, "OK"
+        elif provider == "lmstudio":
+            # Hardcoded local endpoint for LM Studio to match call_llm
+            local_url = base_url or "http://localhost:1234/v1"
+            client = OpenAI(api_key=api_key or "lm-studio", base_url=local_url)
+            client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                timeout=10
+            )
+            return True, "OK"
         else:
-            # OpenAI / LM Studio / Groq
+            # OpenAI / DeepSeek / Groq
             client = OpenAI(api_key=api_key or "sk-no-key-required", base_url=base_url or None)
             client.chat.completions.create(
                 model=model_name,
@@ -163,7 +174,7 @@ def generate_judge_schema(indices_list):
         "properties": {
             "thought_process": {
                 "type": "string",
-                "description": "חובה: כתוב לפחות 2 משפטים בעברית המנתחים את התרגום מול המקור. הסבר בדיוק למה החלטת לפסול או לאשר. אל תשתמש ב-'...'."
+                "description": "חובה: כתוב לפחות משפט אחד בעברית המנתחים את התרגום מול המקור. הסבר בדיוק למה החלטת לפסול או לאשר. אל תשתמש ב-'...'."
             },
             "summary": {
                 "type": "string",
@@ -442,7 +453,7 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
                           any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
                           (judge_model_cfg.get('provider') == 'lmstudio')
 
-    system_prompt = f"""אתה אודיטור QA חסר רחמים. תפקידך למצוא שגיאות טכניות בתרגום כתוביות.
+    system_prompt = f"""אתה אודיטור מקצועי, דייקן וקשוב להקשר. תפקידך למצוא שגיאות טכניות בתרגום כתוביות.
 נתון לך גם בלוק של כתוביות חופפות לצורך הקשר בלבד - אל תבצע עליו ביקורת!
 
 ### חוקי הפסילה (אם אחד מהם מתקיים, עליך לפסול את הבאץ'): ###
@@ -456,7 +467,7 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
 - **בדיקה כירורגית:** עליך לבדוק כל אינדקס בנפרד. אל תעתיק שגיאה מאינדקס אחד לאחר אם היא לא קיימת שם!
 - **אימות מול שדה התרגום:** לפני שאתה קובע ששם דובר או חותמת שמע "נשארו", ודא שהם מופיעים בתוך הטקסט בשדה `תרגום_עברית`. אל תתבלבל עם שדה `מקור_אנגלית`.
 - **חובה לענות בעברית בלבד!** כל הטקסטים שאתה כותב ב-thought_process, ב-summary, ובתיאור השגיאות חייבים להיות מנוסחים בעברית התקנית. הופעת משפטים באנגלית תחשב לכישלון טכני.
-- חל איסור מוחלט על שימוש ב-"..."! אתה חייב לכתוב לפחות 2 משפטים מלאים בעברית בכל שדה טקסט.
+- חל איסור מוחלט על שימוש ב-"..."! אתה חייב לכתוב לפחות משפט אחד בעברית בכל שדה טקסט.
 - אל תשתמש במילים בודדות לתיאור השגיאה. כתוב בדיוק מה הטעות (למשל: "השם ג'ף נשאר בתחילת השורה").
 - אם הבאץ' תקין לחלוטין: סמן is_rejected: false.
 - אם מצאת ולו טעות אחת זעירה: סמן is_rejected: true.
@@ -533,7 +544,7 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
             "properties": {
                 "thought_process": {
                     "type": "string",
-                    "description": "ניתוח מעמיק בעברית (מינימום 2 משפטים). הסבר בדיוק מה בדקת. אל תשתמש ב-'...'."
+                    "description": "ניתוח מעמיק בעברית (מינימום משפט אחד). הסבר בדיוק מה בדקת. אל תשתמש ב-'...'."
                 },
                 "summary": {
                     "type": "string",
