@@ -840,13 +840,18 @@ class TranslationEngine:
                             al_restored = 0
                             for idx in indices:
                                 if idx in batch_alignment_map:
-                                    subtitle_aligns = batch_alignment_map[idx]
                                     heb_text = received_dict[idx]
+                                    # If the translation is empty (LLM removed SDH/etc), don't restore tags
+                                    if not heb_text.strip():
+                                        continue
+
+                                    subtitle_aligns = batch_alignment_map[idx]
                                     h_lines = heb_text.split('\n')
                                     
                                     # Case A: Line count matches perfectly
                                     if len(h_lines) >= max(subtitle_aligns.keys()) + 1:
                                         for line_idx, pos in subtitle_aligns.items():
+                                            # We ensure the standard {\anX} format with a backslash
                                             h_lines[line_idx] = f"{{\\an{pos}}}{h_lines[line_idx]}"
                                             al_restored += 1
                                         received_dict[idx] = '\n'.join(h_lines)
@@ -855,6 +860,7 @@ class TranslationEngine:
                                     # Prepend unique alignment tags to the first line
                                     else:
                                         unique_pos = sorted(list(set(subtitle_aligns.values())))
+                                        # Standardize to {\anX}
                                         tags = "".join([f"{{\\an{p}}}" for p in unique_pos])
                                         received_dict[idx] = f"{tags}{heb_text}"
                                         al_restored += len(unique_pos)

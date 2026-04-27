@@ -35,8 +35,8 @@ def fix_rtl(text):
     for line in lines:
         clean_line = line.strip()
         
-        # דילוג על שורות ריקות, אינדקסים או זמנים (למקרה שהפונקציה מקבלת SRT מלא)
-        if not clean_line or clean_line.isdigit() or '-->' in clean_line:
+        # דילוג על שורות ריקות, אינדקסים, זמנים או שורות המתחילות בתגית טכנית (כמו {anX})
+        if not clean_line or clean_line.isdigit() or '-->' in clean_line or clean_line.startswith('{'):
             fixed_lines.append(line)
             continue
             
