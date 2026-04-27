@@ -13,7 +13,7 @@ RE_MISSING_COLON = re.compile(r'([{,])\s*"([^"\\:]+)"\s*(?=[,}\]])')
 RE_TRUNCATED_KEY = re.compile(r'([{,])\s*"[^"\\:]+"$')
 RE_HEB_ESCAPE_FIX = re.compile(r'\\+נ')
 RE_NON_PRINTABLE = re.compile(r'[\x00-\x1F\x7F]')
-RE_SDH_CLEANER = re.compile(r'\[.*?\]|\(.*?\)|♪|<.*?>')
+RE_SDH_CLEANER = re.compile(r'\[.*?\]|\(.*?\)|♪|<.*?>|\{.*?\}')
 RE_FOREIGN_CHARS = re.compile(r'[^\x00-\x7F\u0590-\u05FF\u200E\u200F\u202A-\u202C\u2018-\u201D\u2026\u2013\u2014\u20AA\u20AC\u00A3\xA0\xB0♪♫]')
 RE_ENGLISH_WORDS = re.compile(r'[a-zA-Z]+')
 RE_EXEMPT_ACRONYM = re.compile(r'[A-Z]{2,}')
@@ -452,7 +452,7 @@ def pre_audit_source(eng_dict, illegal_labels=None):
 
 # Pre-compiled regexes for cleanup_failed_translation (module-level for performance)
 _RE_HTML_STRIP   = re.compile(r'<[^>]+>')
-_RE_LATIN_STRIP  = re.compile(r'[a-zA-Z]+')
+_RE_LATIN_STRIP  = re.compile(r'[a-zA-Z]+(?![^{]*\})')  # Strips English letters EXCEPT those inside {tags}
 _RE_SDH_NON_HEB  = re.compile(r'[\[\(][^\u05d0-\u05ea\n\r]{0,60}[\]\)]')  # SDH brackets with no Hebrew content
 
 
