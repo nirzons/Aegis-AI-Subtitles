@@ -43,8 +43,13 @@ pip install -r requirements.txt
 ### Quick Start
 1. Clone the repository.
 2. **Setup Directories**:
-   - `English subtitles/`: Place your source `.srt` files here (can be renamed per-project).
-   - `sysprm files/`: Place your project JSON instructions here.
+   - **Source Directory**: Place your source `.srt` files in a folder named `<Language> subtitles/`. The language name must match one of the supported profiles below.
+     *   *Example: `English subtitles/`, `French subtitles/`, `Chinese subtitles/`*
+   - **System Params**: Place your project JSON instructions in the `sysprm files/` folder.
+   - **Translated Output**: The engine automatically creates an output folder named `Translated <Target> subtitles/` (e.g., `Translated Hebrew subtitles/`).
+
+**Supported Language Names (Case Sensitive):**
+English, Hebrew, Arabic, French, Spanish, German, Chinese, Portuguese, Russian, Italian, Polish, Ukrainian.
 3. **Run Application**:
    ```bash
    python translator_ai.pyw
