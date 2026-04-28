@@ -56,9 +56,11 @@ class TranslatorApp:
         self.curr_dir = os.getcwd()
         self.english_subs_dir = os.path.join(self.curr_dir, "English subtitles")
         self.sysprm_dir = os.path.join(self.curr_dir, "sysprm files")
-        self.output_dir = os.path.join(self.curr_dir, "Translated Hebrew subtitles")
+        # Output dir will be set dynamically in refresh_languages_ui / on_language_change
+        self.output_dir = os.path.join(self.curr_dir, "Translated subtitles")
         self.checkpoint_dir = os.path.join(self.curr_dir, ".checkpoints")
         self.logs_dir = os.path.join(self.curr_dir, "logs")
+
 
         for d in [self.english_subs_dir, self.sysprm_dir, self.output_dir, self.logs_dir, self.checkpoint_dir]:
             os.makedirs(d, exist_ok=True)
@@ -73,18 +75,65 @@ class TranslatorApp:
         # UI & Engine Initialization
         self.ui = MainUILayout(self.root)
         self.ui.setup(self)
+
+        # Multi-Language Bindings
+        self.ui.widgets.source_combo.bind("<<ComboboxSelected>>", self.on_language_change)
+        self.ui.widgets.target_combo.bind("<<ComboboxSelected>>", self.on_language_change)
+
         
         # Pass the shared_state object into the engine
         self.engine = TranslationEngine(self.log_queue, self.ui_queue, shared_state=self.shared_state)
         # Initial Actions
         self.refresh_files()
         self.refresh_models_ui()
+        self.refresh_languages_ui()
         self.root.after(100, self.process_queues)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+
     # --- UI Event Handlers ---
 
+    def refresh_languages_ui(self):
+        from language_profiles import BUILT_IN_PROFILES
+        codes = sorted(BUILT_IN_PROFILES.keys())
+        self.ui.widgets.source_combo['values'] = codes
+        self.ui.widgets.target_combo['values'] = codes
+        
+        # Load from settings
+        trans_cfg = SETTINGS.config.get("translation", {})
+        self.ui.widgets.source_lang_var.set(trans_cfg.get("source_lang_code", "en"))
+        self.ui.widgets.target_lang_var.set(trans_cfg.get("target_lang_code", "he"))
+        
+        self.on_language_change() # Trigger initial output_dir sync
+
+    def on_language_change(self, event=None):
+        source = self.ui.widgets.source_lang_var.get()
+        target_code = self.ui.widgets.target_lang_var.get()
+        
+        # 1. Update config FIRST to ensure SETTINGS.get_active_profile() works correctly
+        if "translation" not in SETTINGS.config:
+            SETTINGS.config["translation"] = {}
+            
+        SETTINGS.config["translation"]["source_lang_code"] = source
+        SETTINGS.config["translation"]["target_lang_code"] = target_code
+        SETTINGS.save_settings()
+
+        # 2. Now fetch the profile (it will reflect the new target_code)
+        profile = SETTINGS.get_active_profile()
+
+        # Update source and output directories dynamically
+        self.english_subs_dir = os.path.join(self.curr_dir, f"{profile.source_lang} subtitles")
+        self.output_dir = os.path.join(self.curr_dir, f"Translated {profile.target_lang} subtitles")
+        
+        for d in [self.english_subs_dir, self.output_dir]:
+            os.makedirs(d, exist_ok=True)
+        
+        if not self.is_running:
+            self.refresh_files()
+            log(self.log_queue, self.session_log_file, f"🌐 Profile: {profile.source_lang} → {profile.target_lang}")
+
     def on_model_change(self, event=None):
+
         idx_str = self.ui.widgets.model_var.get().split(" - ")[0]
         if idx_str in SETTINGS.config["models"]:
             self.ui.widgets.batch_size_var.set(str(SETTINGS.config["models"][idx_str]['batch_size']))
@@ -149,6 +198,15 @@ class TranslatorApp:
             self.shared_state.update_cost(ckpt.get("total_main_cost", 0.0), ckpt.get("total_judge_cost", 0.0), 
                                          display_text=self.ui.widgets.lbl_cost.cget("text"))
         # ──────────────────────────────────
+        
+        # ── Language & Profile Restoration ──
+        if "source_lang_code" in ckpt:
+            self.ui.widgets.source_lang_var.set(ckpt["source_lang_code"])
+        if "target_lang_code" in ckpt:
+            self.ui.widgets.target_lang_var.set(ckpt["target_lang_code"])
+        
+        # Trigger directory/profile sync (calls refresh_files)
+        self.on_language_change()
         
         self.ui.widgets.srt_var.set(ckpt.get("srt_file", ""))
         self.ui.widgets.sysprm_var.set(ckpt.get("sys_file", ""))
@@ -347,6 +405,92 @@ class TranslatorApp:
             messagebox.showerror("Error", "Please select both an SRT file and a System Prompt for a new session.")
             return
 
+        # --- Sysprm Language Sanity Check ---
+        sys_path = os.path.join(self.sysprm_dir, sys_name)
+        if os.path.exists(sys_path):
+            try:
+                with open(sys_path, 'r', encoding='utf-8-sig') as f:
+                    sys_content = f.read()
+                
+                from app_utils import detect_sysprm_language
+                detected_lang_type = detect_sysprm_language(sys_content) # "English" or "Native"
+                
+                profile = SETTINGS.get_active_profile()
+                use_native = self.ui.widgets.native_instr_var.get()
+                
+                sys_name_lower = sys_name.lower()
+                source_lang_name = profile.source_lang.lower()
+                target_lang_name = profile.target_lang.lower()
+                
+                lang_variants = {
+                    "hebrew": ["hebrew", "heb", "עברית"],
+                    "french": ["french", "fra", "fre", "צרפתית"],
+                    "spanish": ["spanish", "esp", "ספרדית"],
+                    "english": ["english", "eng", "אנגלית"],
+                    "chinese": ["chinese", "zh", "chi", "סינית"],
+                    "portuguese": ["portuguese", "port", "pt", "פורטוגזית"],
+                    "russian": ["russian", "ru", "rus", "רוסית"],
+                    "italian": ["italian", "it", "ita", "איטלקית"],
+                    "polish": ["polish", "pl", "pol", "פולנית"],
+                    "ukrainian": ["ukrainian", "uk", "ukr", "אוקראינית"]
+                }
+                
+                # Check for "<source>_2_<target>" pattern
+                mismatch = False
+                mismatch_reason = ""
+                
+                # 1. Native vs English content check
+                if detected_lang_type == "English" and use_native:
+                    mismatch_reason = f"English .sysprm file detected, but 'Native Instructions' is ON for {profile.target_lang}."
+                    mismatch = True
+                elif detected_lang_type == "Native" and not use_native:
+                    mismatch_reason = f"Native .sysprm file detected, but 'Native Instructions' is OFF for {profile.target_lang}."
+                    mismatch = True
+                
+                # 2. Filename Source/Target check (Modern format: ..._source_2_target...)
+                if not mismatch and "_2_" in sys_name_lower:
+                    try:
+                        # Extract source and target from filename
+                        # Expected format: show_season_source_2_target[_ni].sysprm
+                        parts = sys_name_lower.split('_')
+                        if "2" in parts:
+                            idx = parts.index("2")
+                            file_source = parts[idx-1]
+                            file_target = parts[idx+1]
+                            
+                            source_expected = lang_variants.get(source_lang_name, [source_lang_name])
+                            target_expected = lang_variants.get(target_lang_name, [target_lang_name])
+                            
+                            if not any(k in file_source for k in source_expected):
+                                mismatch_reason = f"Source language mismatch: Selected {profile.source_lang} but SysPrm says '{file_source}'."
+                                mismatch = True
+                            elif not any(k in file_target for k in target_expected):
+                                mismatch_reason = f"Target language mismatch: Selected {profile.target_lang} but SysPrm says '{file_target}'."
+                                mismatch = True
+                    except Exception: pass # Fallback to keyword check if parsing fails
+                
+                # 3. Fallback Keyword check (Legacy or if parsing failed)
+                if not mismatch:
+                    target_expected = lang_variants.get(target_lang_name, [target_lang_name])
+                    has_target_keyword = any(k in sys_name_lower for k in target_expected)
+                    
+                    if not has_target_keyword and ("_ni" in sys_name_lower or detected_lang_type == "Native"):
+                        mismatch_reason = f"The selected SysPrm '{sys_name}' does not appear to be for {profile.target_lang}."
+                        mismatch = True
+                    
+                if mismatch:
+                    mismatch_msg = f"⚠️ Language Mismatch Warning:\n\n{mismatch_reason}\n\nThis will likely cause the AI to output the wrong language or hallucinate. Would you like to proceed anyway?"
+                    ans = messagebox.askyesno("Language Mismatch Warning", mismatch_msg, parent=self.root)
+                    if not ans:
+                        log(self.log_queue, self.session_log_file, "🛑 Session aborted by user due to language mismatch.")
+                        return
+                
+                log(self.log_queue, self.session_log_file, f"🔍 SysPrm Analysis: Detected {detected_lang_type} formatting.")
+            except Exception as e:
+                log(self.log_queue, self.session_log_file, f"⚠️ SysPrm sanity check failed: {e}")
+        # ------------------------------------
+
+
         config = {
             "resume_mode": resume_mode,
             "debug_mode": self.ui.widgets.debug_var.get(),
@@ -367,8 +511,10 @@ class TranslatorApp:
             "output_dir": self.output_dir,
             "scratch_dir": os.path.join(self.curr_dir, "scratch"),
             "bypass_intervention": self.ui.widgets.bypass_intervention_var.get(),
-            "logs_dir": self.logs_dir
+            "logs_dir": self.logs_dir,
+            "language_profile": SETTINGS.get_active_profile()
         }
+
 
         if resume_mode:
             ckpt = self.available_checkpoints[choice_idx - 1]
@@ -617,7 +763,9 @@ class TranslatorApp:
             def re_enable():
                 self.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
                 
-            LiveViewer(self.root, path, self.engine.current_output_file, on_close=re_enable)
+            profile = SETTINGS.get_active_profile()
+            LiveViewer(self.root, path, self.engine.current_output_file, profile=profile, on_close=re_enable)
+
     def _apply_styles(self):
         style = ttk.Style()
         style.theme_use('clam')  # Allows much better customization than 'vista'

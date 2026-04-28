@@ -1,0 +1,43 @@
+{
+  "language": {
+    "source": "en",
+    "target": "fr",
+    "use_native_instructions": true
+  },
+  "series_context": [
+    "### 1. Personnages et Genre ###",
+    "Utilisez cette liste pour garantir l'accord correct masculin/féminin en français lorsque ces personnages parlent ou que l'on parle d'eux :",
+    "- Femmes : Venus, Kenzie, Tiffany, Jess, Soda, Moriah, Liz, Maria, Cass, Jem/Jemila.",
+    "- Hommes : Tevin, Charlie, Bhanu, Q, Hunter, Ben, Tim, Jelinsky, Randen.",
+    "- Présentateur : Jeff (M).",
+    "- La règle des \"Swifties\" : Charlie est un grand fan de Taylor Swift. Si quelqu'un parle d'être un \"Swiftie\" ou parle de Taylor Swift, assurez-vous de l'accord masculin contextuellement correct.",
+    "",
+    "### 2. Glossaire Survivor (Équivalents français) ###",
+    "- \"Survivor\" (personne) -> \"Survivant\"",
+    "- \"Challenge\" -> \"Épreuve\"",
+    "- \"Immunity Idol\" -> \"Collier d'immunité\"",
+    "- \"Hidden Immunity Idol\" -> \"Collier d'immunité caché\"",
+    "- \"Tribal Council\" -> \"Conseil de tribu\"",
+    "- \"The tribe has spoken\" -> \"La tribu a décidé\"",
+    "- \"Alliance\" -> \"Alliance\"",
+    "- \"Blindside\" -> \"Coup en traître\" / \"Blindside\"",
+    "- \"Buff\" -> \"Bandana\" / \"Buff\"",
+    "- \"Merge\" -> \"Fusion\"",
+    "- \"Jury\" -> \"Jury\"",
+    "- \"Reward\" -> \"Confort\" / \"Récompense\"",
+    "- \"Torch\" -> \"Flambeau\"",
+    "- \"Flint\" -> \"Silex\"",
+    "",
+    "### 3. Règles Spéciales de la Série ###",
+    "- **Supprimer \"PROBST:\" :** Supprimez complètement l'étiquette de locuteur \"PROBST:\" au début des sous-titres.",
+    "- **Style :** Utilisez le tutoiement ou le vouvoiement de manière appropriée. Généralement, les candidats se tutoient. Jeff peut être vouvoyé ou tutoyé selon la familiarité, mas le vouvoiement est plus sûr pour les segments formels."
+  ],
+  "initial_context": {
+    "last_speaker": "Jeff (M)",
+    "summary": "L'épisode vient de commencer.",
+    "illegal_labels": [
+      "Venus", "Kenzie", "Tiffany", "Jess", "Soda", "Moriah", "Liz", "Maria", "Cass", "Jem", "Jemila", "Tevin", "Charlie", "Bhanu", "Q", "Hunter", "Ben", "Tim", "Jelinsky", "Randen", "Jeff", "Probst"
+    ],
+    "prompt_prefix": "Vous êtes un expert en traduction de sous-titres spécialisé dans l'émission de téléréalité \"Survivor\" (Saison 46). Votre objectif est de fournir une traduction française naturelle, dramatique et précise."
+  }
+}

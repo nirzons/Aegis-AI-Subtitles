@@ -1,0 +1,43 @@
+{
+  "language": {
+    "source": "en",
+    "target": "fr",
+    "use_native_instructions": false
+  },
+  "series_context": [
+    "### 1. Characters and Gender ###",
+    "Use this list to ensure correct male/female agreement in French when these characters speak or are spoken about:",
+    "- Female: Venus, Kenzie, Tiffany, Jess, Soda, Moriah, Liz, Maria, Cass, Jem/Jemila.",
+    "- Male: Tevin, Charlie, Bhanu, Q, Hunter, Ben, Tim, Jelinsky, Randen.",
+    "- Host: Jeff (M).",
+    "- The \"Swifties\" Rule: Charlie is a huge Taylor Swift fan. If someone refers to being a \"Swiftie\" or talks about Taylor Swift, ensure contextually correct masculine agreement.",
+    "",
+    "### 2. Survivor Glossary (French equivalents) ###",
+    "- \"Survivor\" (person) -> \"Survivant\"",
+    "- \"Challenge\" -> \"Épreuve\"",
+    "- \"Immunity Idol\" -> \"Collier d'immunité\"",
+    "- \"Hidden Immunity Idol\" -> \"Collier d'immunité caché\"",
+    "- \"Tribal Council\" -> \"Conseil de tribu\"",
+    "- \"The tribe has spoken\" -> \"La tribu a décidé\"",
+    "- \"Alliance\" -> \"Alliance\"",
+    "- \"Blindside\" -> \"Coup en traître\" / \"Blindside\"",
+    "- \"Buff\" -> \"Bandana\" / \"Buff\"",
+    "- \"Merge\" -> \"Fusion\"",
+    "- \"Jury\" -> \"Jury\"",
+    "- \"Reward\" -> \"Confort\" / \"Récompense\"",
+    "- \"Torch\" -> \"Flambeau\"",
+    "- \"Flint\" -> \"Silex\"",
+    "",
+    "### 3. Special Series Rules ###",
+    "- **Delete \"PROBST:\":** Completely remove the speaker label \"PROBST:\" at the start of subtitles.",
+    "- **Style:** Use 'tutoiement' or 'vouvoiement' appropriately. Generally, contestants use 'tu' with each other. Jeff may be addressed with 'vous' or 'tu' depending on the familiarity, but 'vous' is safer for formal segments."
+  ],
+  "initial_context": {
+    "last_speaker": "Jeff (M)",
+    "summary": "The episode just started.",
+    "illegal_labels": [
+      "Venus", "Kenzie", "Tiffany", "Jess", "Soda", "Moriah", "Liz", "Maria", "Cass", "Jem", "Jemila", "Tevin", "Charlie", "Bhanu", "Q", "Hunter", "Ben", "Tim", "Jelinsky", "Randen", "Jeff", "Probst"
+    ],
+    "prompt_prefix": "You are an expert subtitle translator specializing in the reality show \"Survivor\" (Season 46). Your goal is to provide a natural, dramatic, and accurate French translation."
+  }
+}

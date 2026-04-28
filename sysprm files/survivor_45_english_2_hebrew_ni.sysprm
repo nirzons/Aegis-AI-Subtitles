@@ -1,48 +1,10 @@
 {
-  "last_speaker": "ג'ף (M) פונה למתמודדים",
-  "summary": "הפרק רק התחיל.",
-  "illegal_labels": [
-    "די",
-    "ג'ולי",
-    "קטורה",
-    "קלי",
-    "קנדרה",
-    "אמילי",
-    "ג'יי מאיה",
-    "סביאה",
-    "האנה",
-    "אוסטין",
-    "דרו",
-    "ג'ייק",
-    "ברוס",
-    "קיילב",
-    "סיפו",
-    "שון",
-    "ברנדון",
-    "ג'ף",
-    "Jeff",
-    "Dee",
-    "Julie",
-    "Katurah",
-    "Kellie",
-    "Kendra",
-    "Emily",
-    "J. Maya",
-    "Sabiyah",
-    "Hannah",
-    "Austin",
-    "Drew",
-    "Jake",
-    "Bruce",
-    "Kaleb",
-    "Sifu",
-    "Sean",
-    "Brandon",
-    "Probst",
-    "Jeff Probst"
-  ],
-  "prompt_prefix": "אתה מתרגם כתוביות מומחה המתמחה בתוכנית הריאליטי \"הישרדות\" (עונה 45).",
-  "series_context_lines": [
+  "language": {
+    "source": "en",
+    "target": "he",
+    "use_native_instructions": true
+  },
+  "series_context": [
     "",
     "### 1. דמויות ומגדר ###",
     "השתמש ברשימה זו כדי להבטיח פעלים נכונים בזכר/נקבה בעברית כאשר דמויות אלו מדברות או כאשר מדברים עליהן:",
@@ -105,5 +67,14 @@
     "- \"to flush an idol\" -> \"לחשוף פסלון\"",
     "- \"Getting your first look\" -> \"זוכים להצצה ראשונה\" / \"רואים לראשונה\"",
     "- \"Sanctuary\" / \"The Sanctuary\" -> \"סנקטוארי\" / \"הסנקטוארי\""
-  ]
+  ],
+  "initial_context": {
+    "last_speaker": "ג'ף (M) פונה למתמודדים",
+    "summary": "הפרק רק התחיל.",
+    "illegal_labels": [
+      "די", "ג'ולי", "קטורה", "קלי", "קנדרה", "אמילי", "ג'יי מאיה", "סביאה", "האנה", "אוסטין", "דרו", "ג'ייק", "ברוס", "קיילב", "סיפו", "שון", "ברנדון", "ג'ף",
+      "Jeff", "Dee", "Julie", "Katurah", "Kellie", "Kendra", "Emily", "J. Maya", "Sabiyah", "Hannah", "Austin", "Drew", "Jake", "Bruce", "Kaleb", "Sifu", "Sean", "Brandon", "Probst", "Jeff Probst"
+    ],
+    "prompt_prefix": "אתה מתרגם כתוביות מומחה המתמחה בתוכנית הריאליטי \"הישרדות\" (עונה 45)."
+  }
 }

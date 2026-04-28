@@ -9,10 +9,8 @@ import subprocess
 import queue
 
 RE_SDH_PUNCT = re.compile(r"[-.\s]*[\[(].*?[\])][-.\s]*")
-RE_GHOST_CHARS = re.compile(r'\n[a-zA-Z]{1,2}(?=\s|[א-ת]|<|♪)')
 RE_SYS_IDX = re.compile(r'###\s*(\d+)\.')
-RE_NAME_LABELS = re.compile(r'([A-Z][a-z]+|\([\u0590-\u05FF]+\))')
-RE_NEWLINE_CLEANUP = re.compile(r'\s*\\+[nננ]\s*')
+RE_NEWLINE_CLEANUP_BASE = re.compile(r'\s*\\+[n]\s*')
 
 # Italic Passthrough: pre-compiled at module level for performance.
 # RE_ITALIC_S: single <i>…</i> wrap, content may span multiple lines.
@@ -28,10 +26,10 @@ RE_ALIGNMENT = re.compile(r'^\{(?P<bs>\\)?an(?P<pos>[1-9])\}(?P<rest>.*)', re.DO
 
 import threading
 from constants import (
-    STEP_HEADER, STEP_READ_CONTEXT, STEP_CONTINUOUS_DRAFT, STEP_MAPPING_PLAN, 
-    STEP_SRT_SPLIT_RULES, STEP_FINAL_SRT, STEP_SELF_AUDIT, 
-    STEP_CONTEXT_PRIMING, STEP_METADATA_UPDATE,
-    GLOBAL_TECHNICAL_RULES, JSON_SCHEMA_TEMPLATE, JSON_SCHEMA_LITE, RULE_NO_ENGLISH
+    get_json_schema, get_workflow_step_templates, build_technical_rules, 
+    STEP_HEADER_EN, get_user_prompt_prefix, get_special_instructions_header,
+    get_technical_rules_header, get_exact_count_rule,
+    get_exact_indices_rule, get_do_not_translate_rule, get_tag_rule
 )
 
 from text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch, force_split_overlong_line, cleanup_failed_translation
@@ -128,7 +126,7 @@ class TranslationEngine:
 
         return res_json['translated_srt']
 
-    def _sanitize_ghost_fragments(self, received_dict, stats, session_log_file):
+    def _sanitize_ghost_fragments(self, received_dict, stats, session_log_file, profile):
         """
         Sanitizes post-LLM artifacts, specifically:
         1. Improperly escaped newlines (e.g. literal '\\n')
@@ -141,12 +139,13 @@ class TranslationEngine:
             original_val = str(received_dict[idx])
             
             # Convert raw `\\n` literals back into standard line breaks
-            cleaned_val = RE_NEWLINE_CLEANUP.sub('\n', original_val)
+            cleaned_val = self.re_newline_cleanup.sub('\n', original_val)
             
             # Target \n followed by 1-2 english letters, stripping out the stray English chunk
-            if RE_GHOST_CHARS.search(cleaned_val):
-                cleaned_val = RE_GHOST_CHARS.sub('\n', cleaned_val)
-                repaired_ghost_indices.append(idx)
+            if not profile.target_uses_latin_script:
+                if self.re_ghost_chars.search(cleaned_val):
+                    cleaned_val = self.re_ghost_chars.sub('\n', cleaned_val)
+                    repaired_ghost_indices.append(idx)
         
             if cleaned_val != original_val:
                 changes_detected.append(idx)
@@ -170,6 +169,18 @@ class TranslationEngine:
             batch_size = config["batch_size"]  # UI / configured default; may differ from effective_batch_size while running
             session_log_file = config["session_log_file"]
             
+            profile = config.get("language_profile")
+            if not profile:
+                from settings import SETTINGS
+                profile = SETTINGS.get_active_profile()
+            
+            # Universalization: Dynamic Regex compilation based on profile
+            ranges_str = "".join([f"\\u{s:04x}-\\u{e:04x}" for s, e in profile.target_unicode_ranges])
+            self.re_ghost_chars = re.compile(rf'\n[a-zA-Z]{{1,2}}(?=\s|[{ranges_str}]|<|♪)')
+            self.re_name_labels = re.compile(rf'([A-Z][a-z]+|\([{ranges_str}]+\))')
+            
+            self.re_newline_cleanup = re.compile(profile.newline_regex)
+            
             # Paths
             checkpoint_dir = config["checkpoint_dir"]
             sysprm_dir = config["sysprm_dir"]
@@ -191,6 +202,16 @@ class TranslationEngine:
                 total_main_cost = checkpoint_data.get('total_main_cost', checkpoint_data.get('total_cost', 0.0))
                 total_judge_cost = checkpoint_data.get('total_judge_cost', 0.0)
                 context_state = checkpoint_data['context_state']
+                
+                # Restore Language Metadata from Checkpoint if available
+                if "source_lang_code" in checkpoint_data:
+                    profile.source_lang_code = checkpoint_data["source_lang_code"]
+                if "target_lang_code" in checkpoint_data:
+                    profile.target_lang_code = checkpoint_data["target_lang_code"]
+                if "use_native_instructions" in checkpoint_data:
+                    profile.use_native_instructions = bool(checkpoint_data["use_native_instructions"])
+                if "max_words_per_line" in checkpoint_data:
+                    profile.max_words_per_line = int(checkpoint_data["max_words_per_line"])
                 current_checkpoint_file = config["checkpoint_file_path"] # The actual path to the .json file
                 
                 if not os.path.exists(srt_file) or not os.path.exists(sys_file):
@@ -219,7 +240,7 @@ class TranslationEngine:
                             continue
 
                 base_name = os.path.basename(srt_file)
-                output_file = os.path.join(output_dir, base_name.replace('.srt', f'_{model_cfg["name"]}_heb.srt'))
+                output_file = os.path.join(output_dir, base_name.replace('.srt', f'_{model_cfg["name"]}_{profile.target_lang_code}.srt'))
                 self.current_output_file = output_file
                 current_index = 0
                 processed = 0
@@ -241,27 +262,76 @@ class TranslationEngine:
             clean_lines = [line for line in lines if not line.strip().startswith("//")]
             raw_sysprm = "".join(clean_lines).strip()
             
-            if "===" in raw_sysprm:
-                parts = [p.strip() for p in raw_sysprm.split("===")]
-                initial_context_str = parts[0] if len(parts) >= 2 else "{}"
-                series_context = parts[1] if len(parts) >= 2 else parts[0]
-                prompt_prefix = ""
-            else:
-                try:
-                    sysprm_json = json.loads(raw_sysprm)
-                    prompt_prefix = sysprm_json.get("prompt_prefix", "")
-                    if "series_context_lines" in sysprm_json:
-                        series_context = "\n".join(sysprm_json["series_context_lines"])
-                    else:
-                        series_context = sysprm_json.get("series_context", "")
-                        
-                    initial_context_dict = {k: v for k, v in sysprm_json.items() if k not in ["prompt_prefix", "series_context", "series_context_lines"]}
-                    initial_context_str = json.dumps(initial_context_dict, ensure_ascii=False)
-                except json.JSONDecodeError as e:
-                    self.log_queue.put(f"⚠️ Error parsing sysprm JSON: {e}")
-                    initial_context_str = "{}"
-                    prompt_prefix = ""
-                    series_context = raw_sysprm
+            # ── Ratio Resolution & Logging ──
+            ratios = list(profile.get_ratios(profile.source_lang_code))
+            ratios_source = "Defaults"
+            
+            try:
+                sysprm_json = json.loads(raw_sysprm)
+                
+                # 1. Parse Language Overrides (Tier 0)
+                if "language" not in sysprm_json or "use_native_instructions" not in sysprm_json["language"]:
+                    log(self.log_queue, session_log_file, "❌ Error: SysPrm must be a JSON file and contain 'language': {'use_native_instructions': true/false}. Legacy files are not supported.")
+                    self.ui_queue.put(("finished", None))
+                    return
+
+                lang_cfg = sysprm_json["language"]
+                if "source" in lang_cfg: profile.source_lang_code = lang_cfg["source"]
+                if "target" in lang_cfg: profile.target_lang_code = lang_cfg["target"]
+                profile.use_native_instructions = bool(lang_cfg["use_native_instructions"])
+                mode_str = "Native" if profile.use_native_instructions else "English"
+                log(self.log_queue, session_log_file, f"🌐 Mode: {mode_str} Instructions")
+                
+                if "max_words_per_line" in lang_cfg:
+                    profile.max_words_per_line = int(lang_cfg["max_words_per_line"])
+                
+                # Ratio Overrides
+                sysprm_overrode = False
+                if "min_block_ratio" in lang_cfg:
+                    ratios[0] = float(lang_cfg["min_block_ratio"])
+                    sysprm_overrode = True
+                if "max_block_ratio" in lang_cfg: 
+                    ratios[1] = float(lang_cfg["max_block_ratio"])
+                    sysprm_overrode = True
+                if "batch_min_ratio" in lang_cfg: 
+                    ratios[2] = float(lang_cfg["batch_min_ratio"])
+                    sysprm_overrode = True
+                if "batch_max_ratio" in lang_cfg: 
+                    ratios[3] = float(lang_cfg["batch_max_ratio"])
+                    sysprm_overrode = True
+                
+                if sysprm_overrode:
+                    ratios_source = "SysPrm Override"
+                    if not profile.direct_pair_ratios: profile.direct_pair_ratios = {}
+                    profile.direct_pair_ratios[profile.source_lang_code] = tuple(ratios)
+
+                log(self.log_queue, session_log_file, 
+                    f"📊 Word Ratios ({ratios_source}): MinBlock={ratios[0]}, MaxBlock={ratios[1]}, MinBatch={ratios[2]}, MaxBatch={ratios[3]}")
+
+                # 2. Parse Series Context
+                if "series_context" in sysprm_json:
+                    sc = sysprm_json["series_context"]
+                    series_context = "\n".join(sc) if isinstance(sc, list) else str(sc)
+                elif "series_context_lines" in sysprm_json: # Legacy support for early JSON format
+                    series_context = "\n".join(sysprm_json["series_context_lines"])
+                else:
+                    series_context = ""
+
+                # 3. Parse Prompt Prefix (Legacy JSON)
+                prompt_prefix = sysprm_json.get("prompt_prefix", "")
+
+                # 4. Extract Bookkeeping / Initial Context
+                # Everything not 'language' or 'series_context' is initial context
+                initial_context_dict = {
+                    k: v for k, v in sysprm_json.items() 
+                    if k not in ["language", "series_context", "series_context_lines", "prompt_prefix"]
+                }
+                initial_context_str = json.dumps(initial_context_dict, ensure_ascii=False)
+
+            except json.JSONDecodeError:
+                log(self.log_queue, session_log_file, "❌ Error: SysPrm is not a valid JSON file. Legacy markdown profiles are not supported.")
+                self.ui_queue.put(("finished", None))
+                return
 
             if not resume_mode: log(self.log_queue, session_log_file, "✅ Loaded project-specific context from sysprm.")
 
@@ -275,7 +345,7 @@ class TranslationEngine:
                 
                 # Extract potential speaker names from the gender tracking lists for the auditor
                 # Searches for words in parentheses or capitalize English names
-                name_matches = RE_NAME_LABELS.findall(series_context)
+                name_matches = self.re_name_labels.findall(series_context)
                 for nm in name_matches:
                     clean_nm = nm.strip("()")
                     if len(clean_nm) > 2 and clean_nm not in illegal_labels:
@@ -283,7 +353,6 @@ class TranslationEngine:
                 # Add common technical labels
                 if "Jeff" not in illegal_labels: illegal_labels.append("Jeff")
                 if "Probst" not in illegal_labels: illegal_labels.append("Probst")
-                if "ג'ף" not in illegal_labels: illegal_labels.append("ג'ף")
             
             self.illegal_labels = illegal_labels # Store as instance variable
             idx_workflow = last_idx + 1
@@ -293,32 +362,22 @@ class TranslationEngine:
             # Modular System Instruction Assembly
             use_scratchpad = model_cfg.get("enable_scratchpad", True)
             
-            workflow_steps = [STEP_READ_CONTEXT, STEP_CONTEXT_PRIMING]
-            
-            if use_scratchpad:
-                # Quality Mode: Add full reasoning stack
-                workflow_steps.append(STEP_CONTINUOUS_DRAFT)
-                workflow_steps.append(STEP_MAPPING_PLAN)
-                
-            workflow_steps.append(STEP_SRT_SPLIT_RULES)
-            workflow_steps.append(STEP_FINAL_SRT)
-            # Metadata bookkeeping happens after the core work
-            workflow_steps.append(STEP_METADATA_UPDATE)
-            workflow_steps.append(STEP_SELF_AUDIT)
-            
-            # Format internal steps with correct numbers (שלב 1, 2, ...)
+            workflow_steps = get_workflow_step_templates(profile, use_scratchpad)
             formatted_steps = []
             for i, step_text in enumerate(workflow_steps, 1):
                 formatted_steps.append(step_text.replace("{n}", str(i)))
                 
-            sys_inst_header = STEP_HEADER.replace("[IDX_WORKFLOW]", str(idx_workflow))
+            # Default to English header
+            sys_inst_header = STEP_HEADER_EN.replace("[IDX_WORKFLOW]", str(idx_workflow))
+            
+            # Check if profile provides its own header for native instructions
+            if profile.use_native_instructions and profile.native_workflow_steps and 'header' in profile.native_workflow_steps:
+                sys_inst_header = profile.native_workflow_steps['header'].replace("[IDX_WORKFLOW]", str(idx_workflow))
+
             sys_inst = sys_inst_header + "\n" + "\n".join(formatted_steps)
             
-            tech_rules = GLOBAL_TECHNICAL_RULES.replace("[IDX_TECH]", str(idx_tech)).replace("[IDX_CLEAN]", str(idx_clean))
-            
-            # Inject specific rule for Efficiency Mode (No Scratchpad)
-            if not use_scratchpad:
-                tech_rules += f"\n\n{RULE_NO_ENGLISH}"
+            tech_rules = build_technical_rules(profile)
+            tech_rules = tech_rules.replace("[IDX_TECH]", str(idx_tech)).replace("[IDX_CLEAN]", str(idx_clean))
 
             system_prompt_parts = []
             if prompt_prefix:
@@ -339,14 +398,14 @@ class TranslationEngine:
                     context_state = json.loads(initial_context_str) if initial_context_str != "{}" else {}
                     if not context_state:
                          context_state = {
-                            "last_two_lines_heb": [], "last_speaker_info": "לא ידוע", 
-                            "speakers_gender": {}, "current_setting": "לא ידוע", "summary": "הפרק רק התחיל."
+                            "last_two_lines_target": [], "last_speaker_info": profile.default_unknown_speaker, 
+                            "speakers_gender": {} if profile.gender_tracking else {}, "current_setting": profile.default_setting_label, "summary": profile.default_opening_summary
                          }
                 except json.JSONDecodeError:
                     log(self.log_queue, session_log_file, "⚠️ Warning: Could not parse initial JSON. Falling back to default.")
                     context_state = {
-                        "last_two_lines_heb": [], "last_speaker_info": "לא ידוע", 
-                        "speakers_gender": {}, "current_setting": "לא ידוע", "summary": "הפרק רק התחיל."
+                        "last_two_lines_target": [], "last_speaker_info": profile.default_unknown_speaker, 
+                        "speakers_gender": {} if profile.gender_tracking else {}, "current_setting": profile.default_setting_label, "summary": profile.default_opening_summary
                     }
 
             with open(srt_file, 'r', encoding='utf-8-sig') as f:
@@ -381,29 +440,29 @@ class TranslationEngine:
 
 
             if resume_mode:
-                translated_heb_by_index = load_srt_index_to_text(output_file)
+                translated_target_by_index = load_srt_index_to_text(output_file)
                 # Back-fill last 50 segments for web dashboard history
                 try:
-                    full_heb_history = load_srt_full_history(output_file)
+                    full_target_history = load_srt_full_history(output_file)
                     # Find where we are in ordered_srt_indices
                     if srt_content and ordered_srt_indices: 
                         processed_indices = []
                         # Only scan up to the resume point. 
                         # Do NOT break on a missing segment (in case the LLM skipped an index previously)
                         for idx_o in ordered_srt_indices[:current_index]:
-                            if idx_o in translated_heb_by_index:
+                            if idx_o in translated_target_by_index:
                                 processed_indices.append(idx_o)
                         
                         last_50_indices = processed_indices[-50:]
                         for idx_h in last_50_indices:
-                            h_data = full_heb_history.get(idx_h)
+                            h_data = full_target_history.get(idx_h)
                             if h_data:
                                 e_text = eng_by_index.get(idx_h, "")
                                 self.ui_queue.put(("segment", (idx_h, h_data["time"], e_text, h_data["text"])))
                 except Exception as e:
                     log(self.log_queue, session_log_file, f"⚠️ Warning: History back-fill failed: {e}")
             else:
-                translated_heb_by_index = {}
+                translated_target_by_index = {}
 
             if resume_mode:
                 ckpt_batch_original = int(checkpoint_data.get("batch_size", batch_size))
@@ -504,14 +563,14 @@ class TranslationEngine:
                     attempted_batch_sizes = []  # sizes tried this chunk; on success after retries, effective = one-before-last
                     failures_at_current_size = 0  # need 2 failures at same size before shrinking (avoids one-off glitches)
 
-                    last_judge_error = ""      # הטקסט של השגיאה
-                    last_judged_indices = set() # האינדקסים שהיו בתוך ה-Chunk שנפסל
-                    previous_overlong_indices = set() # עקביות אחר שורות ארוכות מדי לצורך תיקון אוטומטי
+                    last_judge_error = ""      # The error text
+                    last_judged_indices = set() # The indices that were in the rejected Chunk
+                    previous_overlong_indices = set() # Track overlong lines for auto-repair consistency
                     pipeline_start_time = time.time()
                     while not batch_success and not self.should_stop:
                         batch_diagnostics_logged = False
                         this_attempt_auditor_flagged = False  # reset each attempt
-                        heb_audit_reason = ""  # ensure always defined if call_llm fails before check_heuristics
+                        native_audit_reason = ""  # ensure always defined if call_llm fails before check_heuristics
                         attempted_batch_sizes.append(current_batch_size)
                         start_idx = current_index
                         end_idx = min(current_index + current_batch_size, total_blocks)
@@ -542,7 +601,7 @@ class TranslationEngine:
                         
                         text_chunk_parts = []
                         if prev_context_blocks: 
-                            text_chunk_parts.append(f"### [הקשר קודם - לא לתרגום] ###\n{strip_srt(prev_context_blocks)}\n")
+                            text_chunk_parts.append(f"### [{profile.label_prev_context} - DO NOT TRANSLATE] ###\n{strip_srt(prev_context_blocks)}\n")
                         
                         input_payload = { m['index']: m['text'] for m in original_metadata }
                         pipeline_load = sum(len(str(v)) for v in input_payload.values())
@@ -595,29 +654,43 @@ class TranslationEngine:
                         if batch_italic_indices and getattr(self, 'debug_mode', False):
                             log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Stripped outer italics for indices: {', '.join(sorted(batch_italic_indices))}")
 
-                        text_chunk_parts.append(f"### [בלוקים לתרגום - JSON] ###\n{json.dumps(final_input_payload, ensure_ascii=False, indent=2)}\n")
+                        text_chunk_parts.append(f"### [{profile.label_translation_blocks}] ###\n{json.dumps(final_input_payload, ensure_ascii=False, indent=2)}\n")
                         
-                        if next_context_blocks: 
-                            text_chunk_parts.append(f"### [הקשר הבא - לא לתרגום] ###\n{strip_srt(next_context_blocks)}\n")
+                        if next_context_blocks:
+                            suffix = profile.label_do_not_translate
+                            text_chunk_parts.append(f"### [{profile.label_next_context} - {suffix}] ###\n{strip_srt(next_context_blocks)}\n")
                         
                         text_chunk = '\n'.join(text_chunk_parts)
                         indices = [d['index'] for d in original_metadata]
                         
-                        summary_text = context_state.get('summary', 'הפרק רק התחיל.')
-                        last_speaker = context_state.get('last_speaker_info') or context_state.get('last_speaker', 'לא ידוע')
-                        setting = context_state.get('current_setting', 'לא ידוע')
+                        summary_text = context_state.get('summary', profile.default_opening_summary)
+                        last_speaker = context_state.get('last_speaker_info') or context_state.get('last_speaker', profile.default_unknown_speaker)
+                        setting = context_state.get('current_setting', profile.default_setting_label)
                         
-                        last_lines = context_state.get('last_two_lines_heb', [])
-                        last_line_str = f"שורה מתורגמת אחרונה (מהבאץ' הקודם): '{last_lines[-1]}'" if last_lines else ""
+                        last_lines = context_state.get('last_two_lines_target', context_state.get('last_two_lines_heb', []))
+                        use_native = profile.use_native_instructions
                         
+                        last_line_str = ""
+                        if last_lines:
+                            last_line_template = profile.native_last_line_label if use_native else "Last translated line (from previous batch): '{last_line}'"
+                            last_line_str = last_line_template.replace("{last_line}", last_lines[-1])
+                            
                         continuity_note = context_state.get('continuity_note', '')
-                        continuity_str = f"⚠️ הערת רציפות מהבאץ' הקודם (שים לב!): {continuity_note}" if continuity_note and continuity_note.strip() else ""
+                        continuity_str = ""
+                        if continuity_note and continuity_note.strip():
+                            continuity_template = profile.native_continuity_note_label if use_native else "⚠️ Continuity note from previous batch (Attention!): {note}"
+                            continuity_str = continuity_template.replace("{note}", continuity_note)
+
+                        story_header = profile.native_story_context_header if use_native else "### Story Context (Previous Batches) ###"
+                        setting_label = (profile.native_current_setting_label if use_native else "Current Setting: {setting}").replace("{setting}", setting)
+                        summary_label = (profile.native_plot_summary_label if use_native else "Plot Summary: {summary}").replace("{summary}", summary_text)
+                        speaker_label = (profile.native_last_speaker_label if use_native else "Last Speaker (previous batch): {speaker}").replace("{speaker}", last_speaker)
 
                         context_section_lines = [
-                            "### הסיפור עד כה (הקשר קודם) ###",
-                            f"מיקום נוכחי: {setting}",
-                            f"תקציר האירועים: {summary_text}",
-                            f"הדובר האחרון בבאץ' הקודם: {last_speaker}"
+                            story_header,
+                            setting_label,
+                            summary_label,
+                            speaker_label
                         ]
                         if last_line_str: context_section_lines.append(last_line_str)
                         if continuity_str: context_section_lines.append(continuity_str)
@@ -630,8 +703,14 @@ class TranslationEngine:
 
                         # Use Lite Schema for Efficiency Mode if Structured Output isn't being used 
                         # (even if it is, this ensures parity in the prompt instructions)
-                        active_schema_template = JSON_SCHEMA_LITE if not use_scratchpad else JSON_SCHEMA_TEMPLATE
-                        schema_instruction = f"\n{active_schema_template}\n" if not supports_structured else "\n### חובה: השב בפורמט ה-JSON Schema המוגדר בלבד. ###\n"
+                        active_schema_template = get_json_schema(profile, is_lite=(not use_scratchpad))
+                        
+                        mandatory_schema_msg = profile.native_schema_mandatory_label if profile.use_native_instructions else "### MANDATORY: Respond EXACTLY in the specified JSON Schema format. ###"
+                        
+                        if not supports_structured:
+                            schema_instruction = f"\n{active_schema_template}\n"
+                        else:
+                            schema_instruction = f"\n{mandatory_schema_msg}\n"
 
 
 
@@ -641,57 +720,68 @@ class TranslationEngine:
                         has_tags = any("<" in str(val) or "♪" in str(val) for val in input_payload.values())
                         tag_rule = ""
                         if has_tags:
-                            tag_rule = "4. תגיות עיצוב (Formatting Tags): שמור על תגיות כמו <i> או <font color=\"...\"> בדיוק במיקומן המקורי. אל תתרגם מילים טכניות (כמו 'color') ואל תמחק אותן. **חשוב: מותר (ואף חובה) להוסיף ירידת שורה `\\n` בתוך תגיות (למשל `<i>טקסט...\\n...טקסט</i>`) כדי לשמור על חוק 8 המילים לשורה.** וודא שערכי צבע מוקפים במירכאות.\n"
+                            tag_rule = get_tag_rule(profile) + "\n"
+
 
                         # --- PROMPT INJECTION: Pre-emptive Support ---
                         # We scan the SOURCE text to see if there are tricky spots (Names, SDH)
                         # and warn the translator in advance.
                         import text_processing
                         importlib.reload(text_processing)
-                        pre_warnings = text_processing.pre_audit_source(input_payload, illegal_labels=self.illegal_labels)
+                        pre_warnings = text_processing.pre_audit_source(input_payload, illegal_labels=self.illegal_labels, profile=profile)
                         
                         warning_section = ""
                         if pre_warnings:
                             # Build the surgical instruction for the LLM
-                            warning_list = [f"אינדקס {idx}: {msg}" for idx, msg in pre_warnings]
-                            warning_section = f"\n### דגשים מיוחדים לבאץ' הזה (באחריותך!) ###\n" + "\n".join([f"• {w}" for w in warning_list]) + "\n"
+                            warning_list = [f"Index {idx}: {msg}" for idx, msg in pre_warnings]
+                            header = get_special_instructions_header(profile)
+                            warning_section = f"\n{header}\n" + "\n".join([f"• {w}" for w in warning_list]) + "\n"
                             
                             # Conditional Logging to terminal
                             flagged_indices = sorted(list(set(str(idx) for idx, msg in pre_warnings)), key=lambda x: int(x) if x.isdigit() else 0)
                             if getattr(self, 'debug_mode', False):
                                 log(self.log_queue, session_log_file, f"🔍 Forensic Scout: Detailed analysis for indices {flagged_indices}.")
                                 for idx, msg in pre_warnings:
-                                    log(self.log_queue, session_log_file, f"   ↳ אינדקס {idx}: {msg}")
+                                    log(self.log_queue, session_log_file, f"   ↳ Index {idx}: {msg}")
                             else:
                                 log(self.log_queue, session_log_file, f"🔍 Forensic Scout: Targets flagged at indices {flagged_indices}.")
 
+                        user_prompt_prefix = get_user_prompt_prefix(profile)
+                        tech_rules_header = get_technical_rules_header(profile)
+                        rule_count = get_exact_count_rule(profile, expected_count)
+                        rule_indices = get_exact_indices_rule(profile, indices)
+                        rule_do_not_translate = get_do_not_translate_rule(profile)
+
                         user_prompt = f"""
-אתה מתרגם עכשיו את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.
+{user_prompt_prefix}
 {warning_section}
 {context_section}
 
 {text_chunk}
 
-### חוקים טכניים חובה ###
-1. ספירה מדויקת: **חובה עליך להחזיר בדיוק {expected_count} מפתחות באובייקט 'translated_srt'.**
-2. אינדקסים מדויקים: השתמש בדיוק באינדקסים הבאים כמפתחות: {', '.join(indices)}.
-3. **אל תתרגם ואל תכלול בפלט** אף מילה המופיעה בבלוקי ה"הקשר" (בכל שדה שהוא).
+{tech_rules_header}
+{rule_count}
+{rule_indices}
+{rule_do_not_translate}
 {tag_rule}
 {schema_instruction}
 """
 
 
                         feedback_injection = ""
-                        # אם יש שגיאה מהשופט, ויש לפחות אינדקס אחד משותף בין הבאץ' הנוכחי לבאץ' שנפסל
+                        # If there is a judge error, and at least one index is shared between current batch and rejected batch
                         if last_judge_error and set(indices).intersection(last_judged_indices):
-                            feedback_injection = "\n### חובה לתקן את השגיאות הבאות לפי אינדקס (אל תחזור על טעויות אלו): ###\n"
+                            idx_label = profile.native_index_label if profile.use_native_instructions else "Index"
+                            feedback_injection = "\n" + (profile.native_feedback_header if profile.use_native_instructions else "### YOU MUST FIX THE FOLLOWING ERRORS BY INDEX (DO NOT REPEAT THESE MISTAKES): ###") + "\n"
+                            
                             if isinstance(last_judge_error, dict):
                                 for err_idx, err_msg in last_judge_error.items():
                                     if err_idx in ["GLOBAL", "GENERAL", "general"] or str(err_idx).startswith("chunk_") or err_idx in indices or str(err_idx) in [str(i) for i in indices]:
-                                        prefix = f"אינדקס {err_idx}: " if err_idx not in ["GLOBAL", "GENERAL", "general"] and not str(err_idx).startswith("chunk_") else ""
+                                        prefix = f"{idx_label} {err_idx}: " if err_idx not in ["GLOBAL", "GENERAL", "general"] and not str(err_idx).startswith("chunk_") else ""
                                         feedback_injection += f"{prefix}{err_msg}\n"
                             else:
                                 feedback_injection += f"{last_judge_error}\n"
+                            
                             feedback_injection += "----------------------------------------\n"
                         final_prompt = user_prompt + feedback_injection
 
@@ -749,7 +839,7 @@ class TranslationEngine:
                                 # Log Structured Output Schema if batch indices are present
                                 if indices:
                                     # Use the same logic as the real call to ensure the log is accurate
-                                    schema_dump = json.dumps(generate_batch_schema(indices, use_scratchpad=use_scratchpad), ensure_ascii=False, indent=2)
+                                    schema_dump = json.dumps(generate_batch_schema(indices, use_scratchpad=use_scratchpad, profile=profile), ensure_ascii=False, indent=2)
                                     file_log(session_log_file, f"STRUCTURED OUTPUT SCHEMA:\n{schema_dump}\n")
 
                                     
@@ -803,7 +893,16 @@ class TranslationEngine:
                                 raise
 
                             # Auditor Warning for Placeholder Copy-Pasting
-                            if "<הכנס כאן" in cleaned_res or "<חובה למלא" in cleaned_res:
+                            has_placeholder = False
+                            if profile.use_native_instructions and profile.native_placeholder_indicators:
+                                for indicator in profile.native_placeholder_indicators:
+                                    if indicator in cleaned_res:
+                                        has_placeholder = True
+                                        break
+                            elif "<insert" in cleaned_res or "<brief summary" in cleaned_res:
+                                has_placeholder = True
+
+                            if has_placeholder:
                                 log(self.log_queue, session_log_file, "⚠️ AUDITOR WARNING: The LLM responded with identical placeholder text from the prompt template!")
 
                             # Schema Recovery Layer: Handle GPT-5 key hallucinations
@@ -815,19 +914,19 @@ class TranslationEngine:
                             it_stripped = 0
                             for idx in indices:
                                 if idx not in received_dict: continue
-                                heb_text = str(received_dict[idx]).strip()
+                                target_text = str(received_dict[idx]).strip()
                                 
                                 # Case A: Should have italics
                                 if idx in batch_italic_indices:
-                                    if heb_text and not (heb_text.startswith('<i>') and heb_text.endswith('</i>')):
-                                        received_dict[idx] = f"<i>{heb_text}</i>"
+                                    if target_text and not (target_text.startswith('<i>') and target_text.endswith('</i>')):
+                                        received_dict[idx] = f"<i>{target_text}</i>"
                                         it_restored += 1
                                 
                                 # Case B: Should NOT have italics (Hallucination removal)
                                 else:
                                     source_text = str(input_payload.get(idx, ""))
                                     if "<i>" not in source_text:
-                                        match = re.match(r"^<i>(.*)</i>$", heb_text, re.DOTALL)
+                                        match = re.match(r"^<i>(.*)</i>$", target_text, re.DOTALL)
                                         if match:
                                             received_dict[idx] = match.group(1).strip()
                                             it_stripped += 1
@@ -840,13 +939,13 @@ class TranslationEngine:
                             al_restored = 0
                             for idx in indices:
                                 if idx in batch_alignment_map:
-                                    heb_text = received_dict[idx]
+                                    target_text = received_dict[idx]
                                     # If the translation is empty (LLM removed SDH/etc), don't restore tags
-                                    if not heb_text.strip():
+                                    if not target_text.strip():
                                         continue
 
                                     subtitle_aligns = batch_alignment_map[idx]
-                                    h_lines = heb_text.split('\n')
+                                    h_lines = target_text.split('\n')
                                     
                                     # Case A: Line count matches perfectly
                                     if len(h_lines) >= max(subtitle_aligns.keys()) + 1:
@@ -863,13 +962,13 @@ class TranslationEngine:
                                         unique_pos = sorted(list(set(subtitle_aligns.values())))
                                         # Standardize to {\anX} using raw string
                                         tags = "".join([rf"{{\an{p}}}" for p in unique_pos])
-                                        received_dict[idx] = f"{tags}{heb_text}"
+                                        received_dict[idx] = f"{tags}{target_text}"
                                         al_restored += len(unique_pos)
                             
                             if al_restored > 0 and getattr(self, 'debug_mode', False):
                                 log(self.log_queue, session_log_file, f"✨ [Alignment Passthrough] Restored {{\\anX}} for {al_restored} lines.")
 
-                            changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file)
+                            changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file, profile)
 
                             for idx in indices:
                                 if idx not in received_dict:
@@ -878,14 +977,20 @@ class TranslationEngine:
                             strip_music_glyphs_batch(received_dict)
 
                             illegal_labels = context_state.get("illegal_labels", [])
-                            is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels)
+                            is_suspicious, audit_reason, native_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels, profile=profile)
                             
                             # Forced Escalation for Repairs
                             if changes_detected:
                                 is_suspicious = True
-                                repair_note = f"IDX:{','.join(repaired_ghost_indices)}|בוצע תיקון אוטומטי להסרת שאריות אנגלית (Ghost fragments). וודא היטב שהמשפט תקין וזורם." if repaired_ghost_indices else "בוצע תיקון אוטומטי לפורמט השורות (n\\)."
-                                heb_audit_reason = f"{repair_note}; {heb_audit_reason}" if heb_audit_reason else repair_note
-                                audit_reason = f"Repaired by Sanitizer; {audit_reason}" if audit_reason else "Repaired by Sanitizer"
+                                if profile.use_native_instructions:
+                                    indices_str = ','.join(repaired_ghost_indices)
+                                    repair_note = profile.native_repair_note_ghost.replace("{indices}", indices_str) if repaired_ghost_indices else profile.native_repair_note_newline
+                                    native_audit_reason = f"{repair_note}; {native_audit_reason}" if native_audit_reason else repair_note
+                                    audit_reason = f"Repaired by Sanitizer; {audit_reason}" if audit_reason else "Repaired by Sanitizer"
+                                else:
+                                    repair_note = f"IDX:{','.join(repaired_ghost_indices)}|Auto-repair applied to remove source language ghost fragments. Verify the sentence flows naturally." if repaired_ghost_indices else "GLOBAL|Auto-repair applied to line format (\\n)."
+                                    audit_reason = f"Repaired by Sanitizer; {audit_reason}" if audit_reason else "Repaired by Sanitizer"
+                                    native_audit_reason = f"{repair_note}; {native_audit_reason}" if native_audit_reason else repair_note
 
                             if is_suspicious:
                                 this_attempt_auditor_flagged = True  # mark for clean-pass tracking
@@ -898,60 +1003,69 @@ class TranslationEngine:
                                     batch_diagnostics_logged = True
 
                                 if skip_judge:
-                                    # אם יש לנו הערה בעברית מהאודיטור, נשתמש בה. 
-                                    # אם היא ריקה (כי שלחנו לשופט), נשתמש רק בתוצאה של השופט בהמשך.
+                                    # If we have a native note from the auditor, use it.
+                                    # If it's empty (because we sent to judge), we'll use judge results later.
+                                    selected_audit_reason = native_audit_reason
                                     parsed_audit_map = {}
-                                    for p in heb_audit_reason.split("; "):
-                                        if "|" in p:
-                                            scope, msg = p.split("|", 1)
-                                            if scope.startswith("IDX:"):
-                                                idx_list = scope[4:].split(",")
-                                                for idx_val in idx_list:
-                                                    parsed_audit_map[idx_val] = parsed_audit_map.get(idx_val, "") + msg + " "
+                                    if selected_audit_reason:
+                                        for p in selected_audit_reason.split("; "):
+                                            if "|" in p:
+                                                scope, msg = p.split("|", 1)
+                                                if scope.startswith("IDX:"):
+                                                    idx_list = scope[4:].split(",")
+                                                    for idx_val in idx_list:
+                                                        parsed_audit_map[idx_val] = parsed_audit_map.get(idx_val, "") + msg + " "
+                                                else:
+                                                    parsed_audit_map["GLOBAL"] = parsed_audit_map.get("GLOBAL", "") + msg + " "
                                             else:
-                                                parsed_audit_map["GLOBAL"] = parsed_audit_map.get("GLOBAL", "") + msg + " "
-                                        else:
-                                            if p.strip():
-                                                parsed_audit_map["GENERAL"] = parsed_audit_map.get("GENERAL", "") + p + " "
-                                    
-                                    # Cleanup extra spaces
-                                    parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
+                                                if p.strip():
+                                                    parsed_audit_map["GENERAL"] = parsed_audit_map.get("GENERAL", "") + p + " "
+                                        
+                                        # Cleanup extra spaces
+                                        parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
                                     
                                     # === NEW: Stubbornness Fallback (Auto-Correction) ===
-                                    # אם אנחנו בבאץ' מינימלי (2) והאודיטור מזהה שוב את אותה בעיית אורך מילים, נתקן אוטומטית.
+                                    # If we are in a minimal batch (2) and auditor detects the same word-length issue, repair automatically.
                                     fixed_any = False
                                     if current_batch_size == 2:
-                                        overlong_in_this_attempt = {idx for idx, msg in parsed_audit_map.items() if "9 מילים" in msg}
+                                        overlong_pattern = profile.overlong_word
+                                        overlong_in_this_attempt = {idx for idx, msg in parsed_audit_map.items() if (overlong_pattern in msg)}
                                         
-                                        # אם האינדקס כבר הופיע כ"ארוך מדי" בניסיון הקודם של הבאץ' הזה
+                                        # If the index already appeared as "too long" in the previous attempt of this batch
                                         indices_to_fix = overlong_in_this_attempt.intersection(previous_overlong_indices)
                                         
                                         if indices_to_fix:
                                             for idx_to_fix in indices_to_fix:
-                                                # וודא שזו השגיאה היחידה לאינדקס הזה (כדי לא לפספס הזיות או אנגלית)
-                                                if parsed_audit_map[idx_to_fix].strip() == "נמצאה שורה ארוכה מדי (מעל 9 מילים).":
+                                                # Ensure this is the only error for this index (to not miss hallucinations or English)
+                                                err_msg = parsed_audit_map[idx_to_fix].strip()
+                                                
+                                                is_only_overlong = (profile.overlong_phrase in err_msg)
+
+                                                if is_only_overlong:
                                                     old_text = received_dict[idx_to_fix]
                                                     new_text = force_split_overlong_line(old_text)
                                                     if new_text != old_text:
                                                         received_dict[idx_to_fix] = new_text
                                                         fixed_any = True
-                                                        log(self.log_queue, session_log_file, f"💡 Stubborn model detected. Applying programmatic split for index {idx_to_fix}.")
+                                                        log_msg = (profile.native_stubborn_split_log if profile.use_native_instructions else "💡 Stubborn model detected. Applying programmatic split for index {idx}.").replace("{idx}", str(idx_to_fix))
+                                                        log(self.log_queue, session_log_file, log_msg)
                                         
-                                        # עדכון הזיכרון לניסיון הבא (אם יהיה)
+                                        # Update memory for next attempt
                                         previous_overlong_indices = overlong_in_this_attempt
 
                                     if fixed_any:
-                                        # הרצה חוזרת של האודיטור כדי לראות אם התיקון הספיק
-                                        is_suspicious, audit_reason, heb_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels)
+                                        # Rerun auditor to see if repair was enough
+                                        is_suspicious, audit_reason, native_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels, profile=profile)
                                         if not is_suspicious:
-                                            # התיקון האוטומטי עבר! נמשיך כאילו הכל תקין.
-                                            log(self.log_queue, session_log_file, f"✅ Programmatic split resolved the issue. Proceeding...")
+                                            # Auto-repair worked! Continue as if all is well.
+                                            log_msg = profile.native_stubborn_resolved_log if profile.use_native_instructions else "✅ Programmatic split resolved the issue. Proceeding..."
+                                            log(self.log_queue, session_log_file, log_msg)
                                             # We don't raise ValueError, so the loop continues to 'batch_success = True' eventually
                                         elif not skip_judge:
-                                            # התיקון עזר חלקית אבל עדיין צריך שופט
+                                            # Repair helped partially but still needs judge
                                             pass 
                                         else:
-                                            # עדיין דורש ריטריי (אולי בעיה אחרת צצה)
+                                            # Still requires retry (maybe another issue popped up)
                                             last_judge_error = parsed_audit_map
                                             last_judged_indices = set(indices)
                                             _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
@@ -984,13 +1098,14 @@ class TranslationEngine:
                                     judge_batch_size=judge_batch_size,
                                     ordered_srt_indices=ordered_srt_indices,
                                     eng_by_index=eng_by_index,
-                                    heb_completed_by_index=translated_heb_by_index,
+                                    target_completed_by_index=translated_target_by_index,
                                     log_func=lambda m: log(self.log_queue, session_log_file, m),
                                     file_log_func=lambda m: file_log(session_log_file, m),
-                                    audit_reason_heb=heb_audit_reason,
+                                    audit_reason_native=native_audit_reason,
                                     progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t))),
                                     ui_queue=self.ui_queue,
-                                    debug_mode=getattr(self, 'debug_mode', False)
+                                    debug_mode=getattr(self, 'debug_mode', False),
+                                    profile=profile
                                 )
                                 self.ui_queue.put(("judge_stop", None))
                                 push_eta()  # ETA rises to reflect judge audit time
@@ -1018,7 +1133,7 @@ class TranslationEngine:
                                         # Judge itself errored — declare ruling as FAILED and use auditor output as retry feedback
                                         log(self.log_queue, session_log_file, "   ↳ ❌ Judge ruling: FAILED (judge error). Retrying with auditor feedback.")
                                         parsed_audit_map = {}
-                                        for p in heb_audit_reason.split("; "):
+                                        for p in native_audit_reason.split("; "):
                                             if "|" in p:
                                                 scope, msg = p.split("|", 1)
                                                 if scope.startswith("IDX:"):
@@ -1059,8 +1174,8 @@ class TranslationEngine:
 
                             self._finalize_batch_success(
                                 original_metadata, received_dict, f_out, 
-                                translated_heb_by_index, res_json, context_state, 
-                                stats, indices, expected_count, pipeline_load, pipeline_start_time
+                                translated_target_by_index, res_json, context_state, 
+                                stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
                             )
 
                             processed += expected_count 
@@ -1131,7 +1246,7 @@ class TranslationEngine:
                                         })
                                         
                                     # Build a detailed error message
-                                    reason_for_human = heb_audit_reason if heb_audit_reason else "System Error (AI succeeded but Engine crashed)"
+                                    reason_for_human = native_audit_reason if native_audit_reason else "System Error (AI succeeded but Engine crashed)"
                                     if "pipeline_velocity" in str(e):
                                         reason_for_human += " [Internal Bug: 'pipeline_velocity' missing]"
                                     else:
@@ -1145,11 +1260,11 @@ class TranslationEngine:
                                         bypass_dict = {}
                                         last_received = received_dict if 'received_dict' in locals() else {}
                                         for m in eng_src_for_intervention:
-                                            raw_heb = str(last_received.get(m['index'], ""))
-                                            cleaned = cleanup_failed_translation(raw_heb, m['text'], reason_for_human)
+                                            raw_target = str(last_received.get(m['index'], ""))
+                                            cleaned = cleanup_failed_translation(raw_target, m['text'], reason_for_human, profile=profile)
                                             bypass_dict[m['index']] = cleaned
                                             log(self.log_queue, session_log_file,
-                                                f"   🚫 IDX {m['index']}: {repr(raw_heb)[:60]} → {repr(cleaned)[:60]}")
+                                                f"   🚫 IDX {m['index']}: {repr(raw_target)[:60]} → {repr(cleaned)[:60]}")
 
                                         # Create bypass log on first occurrence
                                         if bypass_log_file is None:
@@ -1170,8 +1285,8 @@ class TranslationEngine:
 
                                         self._finalize_batch_success(
                                             original_metadata, received_dict, f_out,
-                                            translated_heb_by_index, res_json, context_state,
-                                            stats, indices, expected_count, pipeline_load, pipeline_start_time
+                                            translated_target_by_index, res_json, context_state,
+                                            stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
                                         )
 
                                         min_batch_failures = 0
@@ -1187,7 +1302,8 @@ class TranslationEngine:
                                         eng_src_for_intervention, 
                                         received_dict if 'received_dict' in locals() else {}, 
                                         reason_for_human,
-                                        config.get("scratch_dir", "scratch")
+                                        config.get("scratch_dir", "scratch"),
+                                        profile=profile
                                     )
                                     intervention_duration = time.time() - intervention_start_t
                                     session_start_time += intervention_duration # Exclude from ETA
@@ -1217,8 +1333,8 @@ class TranslationEngine:
                                         # --- NEW: Call Finalization logic for Manual Fix ---
                                         self._finalize_batch_success(
                                             original_metadata, received_dict, f_out, 
-                                            translated_heb_by_index, res_json, context_state, 
-                                            stats, indices, expected_count, pipeline_load, pipeline_start_time
+                                            translated_target_by_index, res_json, context_state, 
+                                            stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
                                         )
 
                                         # Reset failure counters
@@ -1285,6 +1401,10 @@ class TranslationEngine:
                             "total_main_cost": total_main_cost,
                             "total_judge_cost": total_judge_cost,
                             "context_state": context_state,
+                            "source_lang_code": profile.source_lang_code,
+                            "target_lang_code": profile.target_lang_code,
+                            "use_native_instructions": profile.use_native_instructions,
+                            "max_words_per_line": profile.max_words_per_line,
                             "stats": stats,
                         }
                         with open(current_checkpoint_file, 'w', encoding='utf-8') as ckpt_f:
@@ -1343,7 +1463,7 @@ class TranslationEngine:
             self.ui_queue.put(("finished", None))
             self.ui_queue.put(("refresh", None))
 
-    def _perform_manual_intervention(self, indices, metadata, failed_dict, audit_reason_heb, scratch_dir):
+    def _perform_manual_intervention(self, indices, metadata, failed_dict, audit_reason_native, scratch_dir, profile=None):
         """
         Opens Notepad for the user to manually fix a problematic batch.
         Blocks the engine thread until Notepad is closed.
@@ -1352,19 +1472,26 @@ class TranslationEngine:
         os.makedirs(scratch_dir, exist_ok=True)
 
         # 1. Build Template
-        content = [
-            "####### MANUAL INTERVENTION REQUIRED #######",
-            "####### התערבות אנושית נדרשת ################",
-            "# הוראות:",
-            "# 1. ערוך את התרגום בעברית למיטב יכולתך.",
-            "# 2. שמור את הקובץ (Ctrl+S).",
-            "# 3. סגור את Notepad על מנת להמשיך",
-            "############################################",
-            "",
-            "שורות המקור באנגלית",
-            "##############",
-            ""
+        use_native = profile and profile.use_native_instructions
+        header = profile.native_intervention_header if use_native else "####### MANUAL INTERVENTION REQUIRED #######"
+        instructions = profile.native_intervention_instructions if use_native else [
+            "1. Edit the translation to the best of your ability.",
+            "2. Save the file (Ctrl+S).",
+            "3. Close the editor to continue."
         ]
+        source_label = profile.native_intervention_source_label if use_native else "SOURCE ENGLISH LINES"
+        target_label = profile.native_intervention_target_label if use_native else "TRANSLATED LINES REQUIRING FIX"
+        edit_warning = profile.native_intervention_edit_warning if use_native else "Do not change the index numbers, only the translation text."
+        max_words_warning = (profile.native_intervention_max_words_warning if use_native else "Try to ensure no more than {max_words} words per line.").replace("{max_words}", str(profile.max_words_per_line))
+        error_label = profile.native_intervention_error_label if use_native else "The errors identified in these lines are:"
+
+        content = [header]
+        content.extend(instructions)
+        content.append("############################################")
+        content.append("")
+        content.append(source_label)
+        content.append("##############")
+        content.append("")
         
         for m in metadata:
             content.append(f"{m['index']}")
@@ -1372,11 +1499,11 @@ class TranslationEngine:
             content.append(f"{m['text']}")
             content.append("")
             
-        content.append("שורות מתורגמות שנדרש בהן תיקון")
-        content.append("אל תשנה את השורות עם המספרים, רק את התרגום")
-        content.append("נסה לסדר שלא יהיו יותר מ-8 מילים בשורה")
-        content.append("השגיאות שאותן הסקריפט זיהה בשורות תרגום אלו הן:")
-        content.append(f"< {audit_reason_heb} >")
+        content.append(target_label)
+        content.append(edit_warning)
+        content.append(max_words_warning)
+        content.append(error_label)
+        content.append(f"< {audit_reason_native} >")
         content.append("##############")
         content.append("")
         
@@ -1384,8 +1511,8 @@ class TranslationEngine:
             idx = m['index']
             content.append(f"{idx}")
             content.append(f"{m['timestamp']}")
-            heb_val = failed_dict.get(idx, "")
-            content.append(f"{heb_val}")
+            target_val = failed_dict.get(idx, "")
+            content.append(f"{target_val}")
             content.append("")
             
         while True:
@@ -1428,12 +1555,12 @@ class TranslationEngine:
                 # The while loop will re-open notepad.
 
     def _parse_intervention_file(self, content, metadata):
-        marker = "שורות מתורגמות שנדרש בהן תיקון"
+        marker = self.active_profile.native_intervention_target_label if self.active_profile else "TRANSLATED LINES REQUIRING FIX"
         if marker not in content:
             return False, None, "Marker section missing"
             
         # We only care about the text after the marker
-        heb_part = content.split(marker)[-1]
+        target_part = content.split(marker)[-1]
         
         results = {}
         for m in metadata:
@@ -1447,7 +1574,7 @@ class TranslationEngine:
             escaped_ts = re.escape(ts)
             pattern = rf"(?:^|\n){idx}[ \t]*\n{escaped_ts}[ \t]*\n(.*?)(?=\n\d+[ \t]*\n|\n[#\-_=]|\Z)"
             
-            match = re.search(pattern, heb_part, re.DOTALL)
+            match = re.search(pattern, target_part, re.DOTALL)
             if not match:
                 return False, None, f"Index {idx} or its timestamp was modified or is missing"
             
@@ -1456,8 +1583,8 @@ class TranslationEngine:
         return True, results, None
 
     def _finalize_batch_success(self, original_metadata, received_dict, f_out, 
-                               translated_heb_by_index, res_json, context_state, 
-                               stats, indices, expected_count, pipeline_load, pipeline_start_time):
+                               translated_target_by_index, res_json, context_state, 
+                               stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=True):
         """
         Shared logic for successful batches (both AI and Manual).
         Handles file writing, state updates, and telemetry.
@@ -1465,16 +1592,16 @@ class TranslationEngine:
         translated_lines = []
         for m in original_metadata:
             idx = m['index']
-            heb_text = received_dict[idx]
-            translated_lines.append(f"{idx}\n{m['timestamp']}\n{fix_rtl(heb_text)}")
+            target_text = received_dict[idx]
+            translated_lines.append(f"{idx}\n{m['timestamp']}\n{fix_rtl(target_text, target_is_rtl)}")
             # Emit each successful segment for GUI updates.
-            self.ui_queue.put(("segment", (idx, m['timestamp'], m['text'], heb_text)))
+            self.ui_queue.put(("segment", (idx, m['timestamp'], m['text'], target_text)))
         
         f_out.write('\n\n'.join(translated_lines) + '\n\n')
         f_out.flush()
 
         for m in original_metadata:
-            translated_heb_by_index[m['index']] = fix_rtl(received_dict[m['index']])
+            translated_target_by_index[m['index']] = fix_rtl(received_dict[m['index']], target_is_rtl)
         
         # Harvest flattened context state from response root
         context_state['summary'] = res_json.get('summary', context_state.get('summary'))
@@ -1497,7 +1624,7 @@ class TranslationEngine:
             
             # Basic counters
             eng_wc = len(eng.split())
-            heb_wc = len(heb.split())
+            target_wc = len(heb.split())
             linc["source_chars"] = linc.get("source_chars", 0) + len(eng)
             linc["source_words"] = linc.get("source_words", 0) + eng_wc
             
@@ -1509,7 +1636,7 @@ class TranslationEngine:
                 linc["empty_subs"] = linc.get("empty_subs", 0) + 1
             else:
                 linc["target_chars"] = linc.get("target_chars", 0) + len(heb)
-                linc["target_words"] = linc.get("target_words", 0) + heb_wc
+                linc["target_words"] = linc.get("target_words", 0) + target_wc
                 linc["target_punct"] = linc.get("target_punct", 0) + sum(1 for c in heb if c in '.,!?;:"-()[]')
                 if '\n' in heb:
                     linc["multiline_subs"] = linc.get("multiline_subs", 0) + 1
@@ -1521,8 +1648,8 @@ class TranslationEngine:
                 linc["longest_source_words"] = {"index": idx, "value": eng_wc}
             if len(heb) > linc.get("longest_target_chars", {}).get("value", 0):
                 linc["longest_target_chars"] = {"index": idx, "value": len(heb)}
-            if heb_wc > linc.get("longest_target_words", {}).get("value", 0):
-                linc["longest_target_words"] = {"index": idx, "value": heb_wc}
+            if target_wc > linc.get("longest_target_words", {}).get("value", 0):
+                linc["longest_target_words"] = {"index": idx, "value": target_wc}
 
         # Speed Telemetry
         pipeline_duration = time.time() - pipeline_start_time

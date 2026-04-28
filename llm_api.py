@@ -13,7 +13,7 @@ from text_processing import pre_repair_json
 
 
 def is_process_alive(pid):
-    """בודק אם תהליך חי - תומך ב-Windows, Linux ו-macOS."""
+    """Checks if a process is alive - supports Windows, Linux, and macOS."""
     if not pid:
         return False
     
@@ -98,8 +98,9 @@ def ping_model(model_cfg):
 
 
 
-def generate_batch_schema(indices_list, use_scratchpad=True):
+def generate_batch_schema(indices_list, use_scratchpad=True, profile=None):
     """Generates a dynamic JSON schema for primary translation."""
+    use_native = profile and getattr(profile, 'use_native_instructions', False)
     # Use dict.fromkeys for deduplication while preserving order (important for schema clarity)
     indices = [str(i) for i in indices_list]
     indices = list(dict.fromkeys(indices))
@@ -110,11 +111,11 @@ def generate_batch_schema(indices_list, use_scratchpad=True):
     properties = {
         "thought_process": {
             "type": "string", 
-            "description": "תהליך המחשבה, האסטרטגיה וההתלבטויות לפני התרגום הסופי. אזהרה: אל תעתיק את תיאור השדה! כתוב את מחשבותיך האמיתיות."
+            "description": profile.native_schema_descriptions.get("thought_process", "The thought process, strategy, and deliberations before the final translation. Warning: Do not copy the field description! Write your actual thoughts.") if use_native else "The thought process, strategy, and deliberations before the final translation. Warning: Do not copy the field description! Write your actual thoughts."
         },
         "summary": {
             "type": "string",
-            "description": "תקציר קצר של המתרחש בעלילה כרגע. אזהרה: אל תעתיק את תיאור השדה! כתוב תקציר אמיתי."
+            "description": profile.native_schema_descriptions.get("summary", "A brief summary of what is currently happening in the plot. Warning: Do not copy the field description! Write a real summary.") if use_native else "A brief summary of what is currently happening in the plot. Warning: Do not copy the field description! Write a real summary."
         }
     }
     
@@ -124,11 +125,11 @@ def generate_batch_schema(indices_list, use_scratchpad=True):
     if use_scratchpad:
         properties["continuous_translation_draft"] = {
             "type": "string",
-            "description": "תרגום כל הטקסטים כפסקה אחת רציפה, טבעית וזורמת."
+            "description": profile.native_schema_descriptions.get("continuous_translation_draft", f"Translate all texts as one continuous, natural, and flowing paragraph in {profile.target_lang if profile else 'target language'}.") if use_native else "Translate all texts as one continuous, natural, and flowing paragraph."
         }
         properties["mapping_plan"] = {
             "type": "string",
-            "description": "תוכנית מיפוי תמציתית של חלוקת הטיוטה לאינדקסים."
+            "description": profile.native_schema_descriptions.get("mapping_plan", "A concise mapping plan of dividing the draft into indices.") if use_native else "A concise mapping plan of dividing the draft into indices."
         }
         required_fields.extend(["continuous_translation_draft", "mapping_plan"])
 
@@ -138,18 +139,18 @@ def generate_batch_schema(indices_list, use_scratchpad=True):
         "properties": srt_properties,
         "required": indices,
         "additionalProperties": False,
-        "description": "מילון שקידודו הוא האינדקסים המספריים והערכים הם התרגומים הסופיים לעברית."
+        "description": profile.native_schema_descriptions.get("translated_srt", f"A dictionary where keys are numeric indices and values are the final translations in {profile.target_lang if profile else 'target language'}.") if use_native else "A dictionary where keys are numeric indices and values are the final translations in the target language."
     }
     required_fields.append("translated_srt")
 
     # 4. Bookkeeping (Moved to the end)
     properties["last_speaker_info"] = {
         "type": "string",
-        "description": "שם הדובר (M/F) פונה אל יעד (M/F/לא ידוע/מצלמה)."
+        "description": profile.native_schema_descriptions.get("last_speaker_info", "The speaker's name (M/F) addressing a target (M/F/Unknown/Camera).") if use_native else "The speaker's name (M/F) addressing a target (M/F/Unknown/Camera)."
     }
     properties["continuity_note"] = {
         "type": ["string", "null"],
-        "description": "הוראת רצף לבאץ' הבא (השאר ריק אם אין)."
+        "description": profile.native_schema_descriptions.get("continuity_note", "Continuity instruction for the next batch (leave empty if none).") if use_native else "Continuity instruction for the next batch (leave empty if none)."
     }
     required_fields.extend(["last_speaker_info", "continuity_note"])
     
@@ -161,8 +162,9 @@ def generate_batch_schema(indices_list, use_scratchpad=True):
     }
 
 
-def generate_judge_schema(indices_list):
+def generate_judge_schema(indices_list, profile=None):
     """Generates a dynamic JSON schema for the AI Judge."""
+    use_native = profile and getattr(profile, 'use_native_instructions', False)
     # Use dict.fromkeys for deduplication while preserving order
     indices = [str(i) for i in indices_list]
     indices = list(dict.fromkeys(indices))
@@ -174,29 +176,29 @@ def generate_judge_schema(indices_list):
         "properties": {
             "thought_process": {
                 "type": "string",
-                "description": "חובה: כתוב לפחות משפט אחד בעברית המנתחים את התרגום מול המקור. הסבר בדיוק למה החלטת לפסול או לאשר. אל תשתמש ב-'...'."
+                "description": profile.native_schema_descriptions.get("judge_thought_process", f"Mandatory: Write at least one sentence in {profile.target_lang if profile else 'target language'} analyzing the translation against the source. Explain exactly why you decided to reject or approve. Do not use '...'.") if use_native else "Mandatory: Write at least one sentence analyzing the translation against the source. Explain exactly why you decided to reject or approve. Do not use '...'."
             },
             "summary": {
                 "type": "string",
-                "description": "תקציר קצר (משפט אחד) של העלילה. אל תשתמש ב-'...'."
+                "description": profile.native_schema_descriptions.get("judge_summary", "A short summary (one sentence) of the plot. Do not use '...'.") if use_native else "A short summary (one sentence) of the plot. Do not use '...'."
             },
             "is_valid": {
                 "type": "boolean",
-                "description": "True אם התרגום מושלם. False אם יש לפסול (חוקים 1-6)."
+                "description": profile.native_schema_descriptions.get("judge_is_valid", "True if the translation is perfect. False if it should be rejected.") if use_native else "True if the translation is perfect. False if it should be rejected."
             },
             "error_map": {
                 "type": "object",
                 "properties": error_map_properties,
                 "required": indices,
                 "additionalProperties": False,
-                "description": "מיפוי אינדקסים לשגיאות. חובה לתת נימוק בעברית לכל פסילה. עבור תקין השאר מחרוזת ריקה \"\"."
+                "description": profile.native_schema_descriptions.get("judge_error_map", f"Mapping of indices to errors. Mandatory to provide reasoning in {profile.target_lang if profile else 'target language'} for each rejection. For a valid translation, leave an empty string \"\".") if use_native else "Mapping of indices to errors. Mandatory to provide reasoning for each rejection. For a valid translation, leave an empty string \"\"."
             }
         },
         "required": ["thought_process", "summary", "is_valid", "error_map"],
         "additionalProperties": False
     }
 
-def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False, response_format=None):
+def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False, response_format=None, profile=None):
 
     current_temp = model_cfg.get('temperature', 0.15)
     
@@ -263,7 +265,7 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
                 }
             elif indices_list and supports_structured:
                 use_scratch = model_cfg.get('enable_scratchpad', True)
-                schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
+                schema = generate_judge_schema(indices_list, profile=profile) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch, profile=profile)
                 req_params["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
@@ -347,7 +349,7 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
                     schema = response_format
                 else:
                     use_scratch = model_cfg.get('enable_scratchpad', True)
-                    schema = generate_judge_schema(indices_list) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch)
+                    schema = generate_judge_schema(indices_list, profile=profile) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch, profile=profile)
                     
                 req_params["response_format"] = {
                     "type": "json_schema",
@@ -372,16 +374,15 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
             return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
 
 
-        else:
             # Fallback to old manual prompt style for non-batch calls if any
             final_llm_input = (
-                "### הנחיות וכללים ###\n"
+                "### Guidelines and Rules ###\n"
                 f"{system_prompt}\n\n"
-                "### משימה ונתונים לתרגום ###\n"
-                "אתה מתרגם עכשיו את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.\n"
+                "### Translation Task and Data ###\n"
+                "You are now translating the following batch. Remember: the output must be in the target language only.\n"
                 f"{user_prompt}\n\n"
-                "### תשובה סופית ###\n"
-                "ענה עכשיו בפורמט JSON, כאשר שדה ה-text מתורגם לעברית בלבד:"
+                "### Final Answer ###\n"
+                "Answer now in JSON format, where the target fields are translated only to the target language:"
             )    
             response = client.chat.completions.create(
                 model=model_cfg['name'],
@@ -394,48 +395,72 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
 
 
 
-def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, heb_lookup):
+def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, target_lookup, profile=None):
     """One cue before / after the chunk: EN+HE for judge context (not directly audited)."""
-    lines = [
-        "### CONTEXTUAL OVERLAP (לא לבצע ביקורת ישירה — רק להבנת רצף וזליגה מותרת) ###",
-        "אל תפסול את שורות ה-OVERLAP; השתמש בהן רק כדי להבין אם מידע «זלג» לכתובית סמוכה בבאץ' הנבדק.",
-    ]
+    use_native = profile and getattr(profile, 'use_native_instructions', False)
+    if use_native and profile.native_judge_strings:
+        nj = profile.native_judge_strings
+        lines = [
+            nj.get("overlap_header", "### CONTEXTUAL OVERLAP (Do not audit directly — for understanding continuity and permitted leakage only) ###"),
+            nj.get("overlap_desc", "Do not reject the OVERLAP lines; use them only to understand if information \"leaked\" to an adjacent subtitle in the audited batch."),
+        ]
+    else:
+        lines = [
+            "### CONTEXTUAL OVERLAP (Do not audit directly — for understanding continuity and permitted leakage only) ###",
+            "Do not reject the OVERLAP lines; use them only to understand if information \"leaked\" to an adjacent subtitle in the audited batch.",
+        ]
 
     def fmt_neighbor(title, idx_key):
         if idx_key is None:
-            return f"{title}\n(אין — גבול הקובץ)\n"
+            none_label = profile.native_judge_strings.get("overlap_none", "(None — file boundary)") if use_native and profile.native_judge_strings else "(None — file boundary)"
+            return f"{title}\n{none_label}\n"
         en = eng_by_index.get(idx_key, "")
-        he = heb_lookup.get(idx_key, "")
-        he_disp = he.strip() if isinstance(he, str) and he.strip() else "שורה זו לא תורגמה עדיין - אין לפסול אותה בשל כך - אתה בודק רק את התרגום של השורות שקדמו לה"
-        return f"{title} — אינדקס {idx_key}:\nמקור_אנגלית:\n{en}\n\nתרגום_עברית:\n{he_disp}\n"
+        target_text = target_lookup.get(idx_key, "")
+        
+        if use_native and profile.native_judge_strings:
+            nj = profile.native_judge_strings
+            target_disp = target_text.strip() if isinstance(target_text, str) and target_text.strip() else nj.get("overlap_not_translated", "This line has not been translated yet")
+            source_label = nj.get("source_label", "Source ({lang}):").format(lang=profile.source_lang)
+            target_label = nj.get("target_label", "Target ({lang}):").format(lang=profile.target_lang)
+            return f"{title} — Index {idx_key}:\n{source_label}\n{en}\n\n{target_label}\n{target_disp}\n"
+        else:
+            target_disp = target_text.strip() if isinstance(target_text, str) and target_text.strip() else "This line has not been translated yet - do not reject it for this reason - you are only auditing the translation of the preceding lines"
+            return f"{title} — Index {idx_key}:\nSource:\n{en}\n\nTarget:\n{target_disp}\n"
 
     if not ordered_srt_indices or not chunk_indices:
-        lines.append("(הקשר חיצוני לא סופק.)")
+        missing_label = profile.native_judge_strings.get("overlap_missing_context", "(External context not provided.)") if use_native and profile.native_judge_strings else "(External context not provided.)"
+        lines.append(missing_label)
         return "\n".join(lines)
 
     try:
         i0 = ordered_srt_indices.index(chunk_indices[0])
         i1 = ordered_srt_indices.index(chunk_indices[-1])
     except ValueError:
-        lines.append("(לא ניתן לפתור שכנים — אינדקס חסר ברשימת הסדר.)")
+        resolve_label = profile.native_judge_strings.get("overlap_cannot_resolve", "(Cannot resolve neighbors — missing index in the order list.)") if use_native and profile.native_judge_strings else "(Cannot resolve neighbors — missing index in the order list.)"
+        lines.append(resolve_label)
         return "\n".join(lines)
 
     prev_idx = ordered_srt_indices[i0 - 1] if i0 > 0 else None
     next_idx = ordered_srt_indices[i1 + 1] if i1 + 1 < len(ordered_srt_indices) else None
 
-    lines.append(fmt_neighbor("שורה אחת לפני תחילת ה-chunk (מידע לפני הבאץ')", prev_idx))
-    lines.append(fmt_neighbor("שורה אחת אחרי סוף ה-chunk (מידע אחרי הבאץ')", next_idx))
+    pre_label = profile.native_judge_strings.get("overlap_pre_batch", "One line before the chunk start (Pre-batch information)") if use_native and profile.native_judge_strings else "One line before the chunk start (Pre-batch information)"
+    post_label = profile.native_judge_strings.get("overlap_post_batch", "One line after the chunk end (Post-batch information)") if use_native and profile.native_judge_strings else "One line after the chunk end (Post-batch information)"
+
+    lines.append(fmt_neighbor(pre_label, prev_idx))
+    lines.append(fmt_neighbor(post_label, next_idx))
     return "\n".join(lines)
 
 
-def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordered_srt_indices,
+def call_llm_judge(judge_model_cfg, indices, eng_dict, target_dict, api_key, ordered_srt_indices,
                    log_func=None, progress_func=None, file_log_func=None, 
-                   audit_reason_heb=None, eng_by_index=None, heb_completed_by_index=None, ui_queue=None, judge_batch_size=None, debug_mode=False):
+                   audit_reason_native=None, eng_by_index=None, target_completed_by_index=None, ui_queue=None, judge_batch_size=None, debug_mode=False, profile=None):
     """
     Calls a second LLM to audit the translation batch.
     Returns: (is_overall_valid, error_map, in, out, cached, reasoning)
     """
     from text_processing import pre_repair_json
+    from constants import build_judge_system_prompt
+    use_native = profile and getattr(profile, 'use_native_instructions', False)
     
     if judge_batch_size is not None:
         try:
@@ -453,28 +478,15 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
                           any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4", "o1"])) or \
                           (judge_model_cfg.get('provider') == 'lmstudio')
 
-    system_prompt = f"""אתה אודיטור מקצועי, דייקן וקשוב להקשר. תפקידך למצוא שגיאות טכניות בתרגום כתוביות.
-נתון לך גם בלוק של כתוביות חופפות לצורך הקשר בלבד - אל תבצע עליו ביקורת!
+    if profile:
+        system_prompt = build_judge_system_prompt(profile)
+    else:
+        # Fallback to English/Hebrew if no profile is provided
+        from language_profiles import get_profile
+        fallback_profile = get_profile("en", "he")
+        system_prompt = build_judge_system_prompt(fallback_profile)
 
-### חוקי הפסילה (אם אחד מהם מתקיים, עליך לפסול את הבאץ'): ###
-1. השמטת טקסט: המקור מכיל מלל משמעותי והתרגום ריק או חסר משמעותית. **שים לב:** הסרת חותמות שמע (SDH) כמו [מוזיקה] היא חובה ואינה נחשבת להשמטה!
-2. דליפת שמות (קריטי!): שם דובר נשאר בתרגום (למשל ROCKSROY: או רוקסרוי:).
-3. חותמות שמע (SDH): תיאורי צליל ומוזיקה (למשל: [מוזיקה], [צחוק], (cheering)) **חובה להסיר מהתרגום**. אם הם נשארו בטקסט העברי - עליך לפסול! חריג: דיאלוג בסוגריים (לחישה) הוא תקין.
-4. שאריות אנגלית: קיימת אנגלית בתוך התרגום ללא הצדקה.
-5. תגיות: חוסר התאמה בתגיות עיצוב (כמו <i>).
-
-### הנחיות קריטיות נגד עצלנות והזיות (חובה): ###
-- **התעלמות מתגיות וקודי צבע:** תגיות HTML (כמו `<font color="...">`) וקודי צבע הקסדצימליים (כמו `#FF00FF`) הם מידע טכני. אל תפסול עליהם ואל תתייחס אליהם כאל "שאריות אנגלית".
-- **הבחנה בין שמות דוברים לתוויות תוכן:** לא כל מילה שמסתיימת בנקודתיים היא שם דובר. תוויות כמו "התאריך:", "שם הפרק:" או "תיאור:" הן חלק מהתוכן ואין לפסול עליהן. פסול אך ורק אם מדובר בשם של דמות (למשל `ג'ף:`, `JEFF:`, `רוקסרוי:`).
-- **בדיקה כירורגית:** עליך לבדוק כל אינדקס בנפרד. אל תעתיק שגיאה מאינדקס אחד לאחר אם היא לא קיימת שם!
-- **אימות מול שדה התרגום:** לפני שאתה קובע ששם דובר או חותמת שמע "נשארו", ודא שהם מופיעים בתוך הטקסט בשדה `תרגום_עברית`. אל תתבלבל עם שדה `מקור_אנגלית`.
-- **חובה לענות בעברית בלבד!** כל הטקסטים שאתה כותב ב-thought_process, ב-summary, ובתיאור השגיאות חייבים להיות מנוסחים בעברית התקנית. הופעת משפטים באנגלית תחשב לכישלון טכני.
-- חל איסור מוחלט על שימוש ב-"..."! אתה חייב לכתוב לפחות משפט אחד בעברית בכל שדה טקסט.
-- אל תשתמש במילים בודדות לתיאור השגיאה. כתוב בדיוק מה הטעות (למשל: "השם ג'ף נשאר בתחילת השורה").
-- אם הבאץ' תקין לחלוטין: סמן is_rejected: false.
-- אם מצאת ולו טעות אחת זעירה: סמן is_rejected: true.
-
-השב בפורמט ה-JSON Schema המוגדר בלבד."""
+    system_prompt += "\n\nRespond EXACTLY in the specified JSON Schema format."
 
     total_in, total_out, total_cached, total_reasoning = 0, 0, 0, 0
     master_error_map = {}
@@ -487,36 +499,53 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
     if log_func:
         log_func(f"   ↳ ⚠️ Judge: Auditing in {len(chunks)} chunk(s) of {chunk_size} lines each...")
     
-    heb_lookup = {**(heb_completed_by_index or {}), **heb_dict}
+    target_lookup = {**(target_completed_by_index or {}), **target_dict}
     eng_map = eng_by_index or {}
 
     for idx, chunk_indices in enumerate(chunks):
         if progress_func:
             progress_func(idx + 1, len(chunks))
         chunk_eng = {k: eng_dict[k] for k in chunk_indices if k in eng_dict}
-        chunk_heb = {k: heb_dict[k] for k in chunk_indices if k in heb_dict}
+        chunk_target = {k: target_dict[k] for k in chunk_indices if k in target_dict}
         
         source_str = json.dumps(chunk_eng, ensure_ascii=False, indent=2)
-        trans_str = json.dumps(chunk_heb, ensure_ascii=False, indent=2)
-        overlap_str = _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_map, heb_lookup)
+        trans_str = json.dumps(chunk_target, ensure_ascii=False, indent=2)
+        overlap_str = _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_map, target_lookup, profile=profile)
         if overlap_str:
-            overlap_str = f"### [READ ONLY CONTEXT] (REFERENCE ONLY - DO NOT AUDIT THESE LINES) ###\n{overlap_str}\n"
+            if use_native and profile.native_judge_strings:
+                header = profile.native_judge_strings.get("overlap_header", "### [READ ONLY CONTEXT] (REFERENCE ONLY - DO NOT AUDIT THESE LINES) ###")
+                overlap_str = f"{header}\n{overlap_str}\n"
+            else:
+                overlap_str = f"### [READ ONLY CONTEXT] (REFERENCE ONLY - DO NOT AUDIT THESE LINES) ###\n{overlap_str}\n"
 
-        user_prompt = f"""### AUDIT CHUNK {idx+1}/{len(chunks)} (Blocks: {chunk_indices[0]}-{chunk_indices[-1]}) ###
+        source_lang_name = profile.source_lang if profile else "English"
+        target_lang_name = profile.target_lang if profile else "Target"
+        
+        if use_native and profile.native_judge_strings:
+            nj = profile.native_judge_strings
+            chunk_header = nj.get("chunk_header", "### AUDIT CHUNK {current}/{total} (Blocks: {start}-{end}) ###").format(current=idx+1, total=len(chunks), start=chunk_indices[0], end=chunk_indices[-1])
+            source_header = nj.get("source_label", "Source ({lang}):").format(lang=source_lang_name)
+            target_header = nj.get("target_label", "Translation ({lang}):").format(lang=target_lang_name)
+        else:
+            chunk_header = f"### AUDIT CHUNK {idx+1}/{len(chunks)} (Blocks: {chunk_indices[0]}-{chunk_indices[-1]}) ###"
+            source_header = f"Source ({source_lang_name}):"
+            target_header = f"Translation ({target_lang_name}):"
+
+        user_prompt = f"""{chunk_header}
 
 {overlap_str}
 
-מקור_אנגלית:
+{source_header}
 {source_str}
 
-תרגום_עברית:
+{target_header}
 {trans_str}
 """
         # SURGICAL INJECTION: Only show audit reasons relevant to THIS chunk
-        if audit_reason_heb:
+        if audit_reason_native:
             relevant_reasons = []
             # Audit reasons are typically separated by '; ' and prefixed with 'IDX:#'
-            reasons_list = audit_reason_heb.split("; ")
+            reasons_list = audit_reason_native.split("; ")
             for r in reasons_list:
                 # Check for global errors OR specific index matches for THIS chunk
                 if "IDX:" in r:
@@ -536,29 +565,42 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
 
             if relevant_reasons:
                 reasons_text = "\n".join(relevant_reasons)
-                user_prompt += f"\n### התראת מערכת אוטומטית (Audit): ###\n{reasons_text}\nשים לב: אלגוריתם אוטומטי זיהה חשד לשגיאה הנ\"ל. קרא את האינדקס המדובר בעיון רב. הפעל שיקול דעת עצמאי לחלוטין - ייתכן שהאלגוריתם טועה (למשל בהבדלי אורך טבעיים בין אנגלית לעברית). פסול אך ורק אם מצאת שגיאה אמיתית ומהותית במו עיניך.\n"
+                if use_native and profile.native_judge_strings:
+                    nj = profile.native_judge_strings
+                    sys_warn = nj.get("automated_warning_header", "### AUTOMATED SYSTEM AUDIT WARNING: ###")
+                    sys_desc = nj.get("automated_warning_desc", "NOTE: An automated algorithm flagged a potential error above.")
+                else:
+                    sys_warn = "### AUTOMATED SYSTEM AUDIT WARNING: ###"
+                    sys_desc = "NOTE: An automated algorithm flagged a potential error above. Review the specified index carefully. Exercise independent judgment - the algorithm might be wrong (e.g. natural length differences between languages). Only reject if you see a genuine, material error with your own eyes."
+                user_prompt += f"\n{sys_warn}\n{reasons_text}\n{sys_desc}\n"
 
-        user_prompt += "### סוף נתונים ###\n"
-        user_prompt += "\nאזהרה אחרונה: פסול את הבאץ' (is_rejected: true) אם אתה רואה את השגיאה במו עיניך בתוך שדה התרגום (תרגום_עברית). אל תפסול אם השגיאה מופיעה אך ורק במקור (מקור_אנגלית).\n"
+        end_of_data = profile.native_judge_strings.get("end_of_data", "### END OF DATA ###") if use_native and profile.native_judge_strings else "### END OF DATA ###"
+        user_prompt += f"{end_of_data}\n"
+        
+        if use_native and profile.native_judge_strings:
+            final_warn = profile.native_judge_strings.get("final_warning", "FINAL WARNING: Reject...").format(lang=target_lang_name, source=source_lang_name)
+        else:
+            final_warn = f"\nFINAL WARNING: Reject the batch (`is_rejected: true`) ONLY if you see the error with your own eyes in the Translation ({target_lang_name}) field. DO NOT reject if the error only exists in the Source ({source_lang_name}).\n"
+        user_prompt += f"\n{final_warn}\n"
 
         judge_schema = {
             "type": "object",
             "properties": {
                 "thought_process": {
                     "type": "string",
-                    "description": "ניתוח מעמיק בעברית (מינימום משפט אחד). הסבר בדיוק מה בדקת. אל תשתמש ב-'...'."
+                    "description": profile.native_judge_strings.get("field_desc_thought", "In-depth analysis...") if use_native and profile.native_judge_strings else "In-depth analysis (minimum one full sentence). Explain exactly what you checked. Do not use '...'."
                 },
                 "summary": {
                     "type": "string",
-                    "description": "תקציר קצר של העלילה. אל תשתמש ב-'...'."
+                    "description": profile.native_judge_strings.get("field_desc_summary", "Short plot summary...") if use_native and profile.native_judge_strings else "Short plot summary. Do not use '...'."
                 },
                 "is_rejected": {
                     "type": "boolean",
-                    "description": "True אם לפסול (יש שגיאה). False אם הכל תקין."
+                    "description": profile.native_judge_strings.get("field_desc_is_rejected", "True if rejected...") if use_native and profile.native_judge_strings else "True if rejected (error found). False if completely flawless."
                 },
                 "error_map": {
                     "type": "object",
-                    "properties": {str(k): {"type": "string", "description": "תיאור השגיאה בעברית (משפט מלא). אם תקין, השאר ריק."} for k in chunk_indices},
+                    "properties": {str(k): {"type": "string", "description": profile.native_judge_strings.get("field_desc_error_map", "Error description...") if use_native and profile.native_judge_strings else "Error description (full sentence). Leave empty if flawless."} for k in chunk_indices},
                     "required": [str(k) for k in chunk_indices],
                     "additionalProperties": False
                 }
@@ -581,7 +623,7 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, heb_dict, api_key, ordere
                 chunk_load = 0
                 for idx_c in chunk_indices:
                     chunk_load += len(str(eng_dict.get(idx_c, "")))
-                    chunk_load += len(str(heb_dict.get(idx_c, "")))
+                    chunk_load += len(str(target_dict.get(idx_c, "")))
                 ui_queue.put(("judge_timer_start", {"size": len(chunk_indices), "load": chunk_load}))
 
             raw_res, in_t, out_t, cached_t, reasoning_t = call_llm(

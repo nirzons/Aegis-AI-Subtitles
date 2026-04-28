@@ -11,8 +11,31 @@ class SettingsManager:
         }
         self.load_settings()
 
+    def get_active_profile(self):
+        from language_profiles import get_profile
+        trans_cfg = self.config.get("translation", {})
+        source_code = trans_cfg.get("source_lang_code", "en")
+        target_code = trans_cfg.get("target_lang_code", "he")
+        
+        profile = get_profile(source_code, target_code)
+        
+        if trans_cfg.get("use_native_instructions"):
+            profile.use_native_instructions = True
+            
+        max_words = trans_cfg.get("max_words_per_line_override")
+        if max_words is not None:
+            profile.max_words_per_line = int(max_words)
+            
+        return profile
+
     def load_defaults(self):
         return {
+            "translation": {
+                "source_lang_code": "en",
+                "target_lang_code": "he",
+                "use_native_instructions": False,
+                "max_words_per_line_override": None
+            },
             "api_keys": {
                 "google": os.environ.get("GEMINI_API_KEY") or "",
                 "openai": os.environ.get("OPENAI_API_KEY") or "",
@@ -42,6 +65,11 @@ class SettingsManager:
                 # Dynamic update: ensure any existing models in JSON have the cache_discount field
                 defaults = self.load_defaults()
                 changed = False
+                
+                if "translation" not in self.config:
+                    self.config["translation"] = defaults["translation"]
+                    changed = True
+                    
                 for k, model in self.config["models"].items():
                     if "cache_discount" not in model:
                         # If it's a known model, take its default. Otherwise 90 for deepseek/gpt5, 0 for others.

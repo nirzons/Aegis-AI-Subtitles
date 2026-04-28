@@ -9,11 +9,13 @@ from llm_api import is_process_alive
 
 
 class LiveViewer:
-    def __init__(self, parent, orig_file, trans_file, on_close=None):
+    def __init__(self, parent, orig_file, trans_file, profile=None, on_close=None):
         self.orig_file = orig_file
         self.trans_file = trans_file
+        self.profile = profile
         self.items_map = {}
         self.on_close = on_close
+
         
         self.top = tk.Toplevel(parent)
         self.top.title("Live Translation Viewer")
@@ -44,16 +46,23 @@ class LiveViewer:
         frame = ttk.Frame(self.top)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        self.tree = ttk.Treeview(frame, columns=("Index", "Time", "English", "Hebrew"), show="headings", selectmode="extended")
+        source_label = f"{self.profile.source_lang} Original" if self.profile else "Source Original"
+        target_label = f"{self.profile.target_lang} Translated" if self.profile else "Target Translated"
+
+        self.tree = ttk.Treeview(frame, columns=("Index", "Time", "Source", "Target"), show="headings", selectmode="extended")
         self.tree.heading("Index", text="#")
         self.tree.heading("Time", text="Timestamp")
-        self.tree.heading("English", text="English Original")
-        self.tree.heading("Hebrew", text="Hebrew Translated")
+        self.tree.heading("Source", text=source_label)
+        self.tree.heading("Target", text=target_label)
         
+        source_anchor = tk.W # Source is always English (LTR) for now
+        target_anchor = tk.E if self.profile and self.profile.target_is_rtl else tk.W
+
         self.tree.column("Index", width=50, stretch=tk.NO, anchor=tk.CENTER)
         self.tree.column("Time", width=220, stretch=tk.NO, anchor=tk.CENTER)
-        self.tree.column("English", width=400, stretch=tk.YES, anchor=tk.W)
-        self.tree.column("Hebrew", width=400, stretch=tk.YES, anchor=tk.E)
+        self.tree.column("Source", width=400, stretch=tk.YES, anchor=source_anchor)
+        self.tree.column("Target", width=400, stretch=tk.YES, anchor=target_anchor)
+
         
         self.tree.tag_configure("even", background="#ffffff")
         self.tree.tag_configure("odd", background="#f0f0f0")
@@ -99,7 +108,7 @@ class LiveViewer:
             
             self.items_map[b["index"]] = {
                 "english_lines": lines,
-                "hebrew_lines": [],
+                "target_lines": [],
                 "item_ids": item_ids,
                 "tag": row_tag
             }
@@ -114,16 +123,16 @@ class LiveViewer:
         if trans_blocks:
             for b in trans_blocks:
                 idx = b["index"]
-                new_heb_lines = b["text"].split('\n')
+                new_target_lines = b["text"].split('\n')
                 
                 if idx in self.items_map:
                     data = self.items_map[idx]
                     eng_lines = data["english_lines"]
-                    old_heb_lines = data["hebrew_lines"]
+                    old_target_lines = data["target_lines"]
                     
-                    if old_heb_lines != new_heb_lines:
+                    if old_target_lines != new_target_lines:
                         item_ids = data["item_ids"]
-                        max_lines = max(len(eng_lines), len(new_heb_lines))
+                        max_lines = max(len(eng_lines), len(new_target_lines))
                         
                         while len(item_ids) < max_lines:
                             insert_idx = self.tree.index(item_ids[-1]) + 1
@@ -132,8 +141,8 @@ class LiveViewer:
                             
                         for i in range(max_lines):
                             e_line = eng_lines[i] if i < len(eng_lines) else ""
-                            raw_h_line = new_heb_lines[i] if i < len(new_heb_lines) else ""
-                            h_line = f" {raw_h_line}  " if raw_h_line else ""
+                            raw_target_line = new_target_lines[i] if i < len(new_target_lines) else ""
+                            h_line = f" {raw_target_line}  " if raw_target_line else ""
                             
                             old_values = self.tree.item(item_ids[i], "values")
                             idx_val = old_values[0] if old_values and old_values[0] else ""
@@ -142,7 +151,7 @@ class LiveViewer:
                             self.tree.item(item_ids[i], values=(idx_val, time_val, e_line, h_line))
                             last_updated_id = item_ids[i]
                             
-                        data["hebrew_lines"] = new_heb_lines
+                        data["target_lines"] = new_target_lines
 
         # Auto-scroll logic
         if last_updated_id and not self.initial_scroll_done:

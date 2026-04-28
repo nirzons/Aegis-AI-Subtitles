@@ -26,43 +26,59 @@ class MainUILayout:
         def create_label(parent, text):
             return ttk.Label(parent, text=text, style="Configuration.TLabel")
 
-        create_label(top_frame, "Model:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        # Row 0: Language Selection (NEW)
+        create_label(top_frame, "Source:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.widgets.source_lang_var = tk.StringVar()
+        self.widgets.source_combo = ttk.Combobox(top_frame, textvariable=self.widgets.source_lang_var, state="readonly", width=15)
+        self.widgets.source_combo.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+
+        create_label(top_frame, "Target:").grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+        self.widgets.target_lang_var = tk.StringVar()
+        self.widgets.target_combo = ttk.Combobox(top_frame, textvariable=self.widgets.target_lang_var, state="readonly", width=15)
+        self.widgets.target_combo.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
+
+        # Row 1: Model Selection
+        create_label(top_frame, "Model:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         self.widgets.model_var = tk.StringVar()
         self.widgets.model_combo = ttk.Combobox(top_frame, textvariable=self.widgets.model_var, state="readonly", width=35)
-        self.widgets.model_combo.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        self.widgets.model_combo.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
         
-        create_label(top_frame, "Batch Size:").grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+        create_label(top_frame, "Batch:").grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
         self.widgets.batch_size_var = tk.StringVar()
         self.widgets.batch_entry = ttk.Entry(top_frame, textvariable=self.widgets.batch_size_var, width=10)
-        self.widgets.batch_entry.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
+        self.widgets.batch_entry.grid(row=1, column=4, padx=5, pady=5, sticky=tk.W)
 
         self.widgets.model_combo.bind("<<ComboboxSelected>>", app.on_model_change)
 
-        create_label(top_frame, "SRT File:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        # Row 2: SRT File
+        create_label(top_frame, "SRT File:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
         self.widgets.srt_var = tk.StringVar()
         self.widgets.srt_combo = ttk.Combobox(top_frame, textvariable=self.widgets.srt_var, state="readonly", width=45)
-        self.widgets.srt_combo.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
+        self.widgets.srt_combo.grid(row=2, column=1, columnspan=3, padx=5, pady=5, sticky=tk.W)
         self.widgets.btn_open_srt = ttk.Button(top_frame, text="Open Original", command=app.open_orig_srt)
-        self.widgets.btn_open_srt.grid(row=1, column=3, padx=5, pady=5)
+        self.widgets.btn_open_srt.grid(row=2, column=4, padx=5, pady=5)
 
-        create_label(top_frame, "System Prompt:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+        # Row 3: System Prompt
+        create_label(top_frame, "SysPrm:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
         self.widgets.sysprm_var = tk.StringVar()
         self.widgets.sysprm_combo = ttk.Combobox(top_frame, textvariable=self.widgets.sysprm_var, state="readonly", width=60)
-        self.widgets.sysprm_combo.grid(row=2, column=1, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        self.widgets.sysprm_combo.grid(row=3, column=1, columnspan=4, padx=5, pady=5, sticky=tk.W)
 
-        create_label(top_frame, "Judge Model:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
+        # Row 4: Judge Model
+        create_label(top_frame, "Judge:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
         self.widgets.judge_model_var = tk.StringVar()
         self.widgets.judge_model_combo = ttk.Combobox(top_frame, textvariable=self.widgets.judge_model_var, state="readonly", width=35)
-        self.widgets.judge_model_combo.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
+        self.widgets.judge_model_combo.grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
 
-        create_label(top_frame, "Judge Batch:").grid(row=3, column=2, padx=5, pady=5, sticky=tk.W)
+        create_label(top_frame, "J-Batch:").grid(row=4, column=3, padx=5, pady=5, sticky=tk.W)
         self.widgets.judge_batch_var = tk.StringVar(value="4")
         self.widgets.judge_batch_entry = ttk.Entry(top_frame, textvariable=self.widgets.judge_batch_var, width=10)
-        self.widgets.judge_batch_entry.grid(row=3, column=3, padx=5, pady=5, sticky=tk.W)
+        self.widgets.judge_batch_entry.grid(row=4, column=4, padx=5, pady=5, sticky=tk.W)
 
-        create_label(top_frame, "Resume Session:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
-        resume_frame = tk.Frame(top_frame, bg="white") # Native Frame for white background consistency
-        resume_frame.grid(row=4, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        # Row 5: Resume Session
+        create_label(top_frame, "Resume:").grid(row=5, column=0, padx=5, pady=5, sticky=tk.W)
+        resume_frame = tk.Frame(top_frame, bg="white")
+        resume_frame.grid(row=5, column=1, columnspan=4, sticky=tk.W, padx=5, pady=5)
         
         self.widgets.resume_var = tk.StringVar()
         self.widgets.resume_combo = ttk.Combobox(resume_frame, textvariable=self.widgets.resume_var, state="readonly", width=60)
@@ -72,6 +88,7 @@ class MainUILayout:
         self.widgets.btn_manage_checkpoints.pack(side=tk.LEFT, padx=5)
         
         self.widgets.resume_combo.bind("<<ComboboxSelected>>", app.on_resume_selection)
+
 
         # 2. Control Buttons Frame
         ctrl_frame = ttk.Frame(self.root)

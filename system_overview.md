@@ -20,20 +20,20 @@ The "Brain" of the operation. It manages the batching logic, state persistence (
 ### 3. API & Communication (`llm_api.py`)
 A unified abstraction layer for multiple providers:
 -   **Google Gemini**: Specialized handling for Flash models.
+-   **Google Gemini**: Specialized handling for Flash/Pro models.
 -   **DeepSeek**: Optimized for DeepSeek-V3/R1 with caching support.
--   **OpenAI (GPT-5/o1)**: Implements the `developer` role to isolate instructions from subtitles, ensuring high cache hit ratios and stable reasoning.
-- **Local LLMs**: Standardized OpenAI-compatible interface for LM Studio with **API-level Strict Mode** (response_format) enabled. The engine programmatically synchronizes the `properties` and `required` arrays, applying automatic deduplication (`list(dict.fromkeys())`) to ensure schema compliance and prevent `400 Bad Request` errors caused by overlapping keys.
+-   **OpenAI (GPT-4o/o1)**: Implements the `developer` role to isolate instructions from subtitles, ensuring high cache hit ratios and stable reasoning.
+- **Local LLMs**: Standardized OpenAI-compatible interface for LM Studio with **API-level Strict Mode** (JSON Schema enforcement).
 
 ### 4. Heuristic & AI Auditing (`text_processing.py` & `llm_api.py`)
-A multi-tier validation system prioritizing minimal token usage and localized reasoning:
-- **Forensic Scout & Surgical Injection**: A pre-processing layer that identifies potential technical pitfalls (SDH descriptions, speaker names, mismatched tags) and surgically injects targeted warnings into the relevant chunk's prompt.
-- **Short-Circuit Auditing**: A performance optimization where if any chunk in a batch is rejected by the AI Judge, the remaining audits are immediately halted to save tokens and time.
-- **Parser Safety (Italic Passthrough)**: A robust pre-processor that identifies subtitles entirely wrapped in italics. It uses dual-regex patterns to strip `<i>` tags from single and double-wrapped multi-line blocks, allowing the LLM to focus on pure translation before automatically restoring the formatting tags. This prevents source data truncation and formatting hallucinations.
-- **Source Integrity Shield**: Forensic Scout now audits the source English files themselves for technical errors (like mismatched tags), alerting the user before translation begins.
-- **Localized AI Judge**: A semantic auditor checking for nuanced errors like omissions and tags. It is structurally decoupled from English anchors, enforcing a pure Hebrew reasoning space (`thought_process`, `summary`, `error_map`) to prevent schema inertia and language hallucination in natively-trained models.
+A multi-tier validation system:
+- **Heuristic Shield**: A pre-processing layer that identifies potential technical pitfalls (SDH descriptions, speaker names, mismatched tags). It dynamically switches between **word-density** (Latin) and **character-density** (CJK) auditing based on the active language profile.
+- **Localized AI Judge**: A semantic auditor checking for nuanced errors like omissions and tags. It reasoning space is structurally decoupled from English anchors, using the target language's native logic to prevent language leakage.
+- **Parser Safety (Italic Passthrough)**: A robust pre-processor that identifies subtitles entirely wrapped in italics, preserving formatting while allowing the LLM to focus on translation.
 
-### 5. Settings & Config (`settings.py` & `constants.py`)
-Manages persistent state across sessions. Supports dynamic model pricing and **Cache Discount** calculation, allowing the system to accurately track costs even as API providers change their pricing structures.
+### 5. Settings & Config (`settings.py`, `language_profiles.py`, `constants.py`)
+- **Language Profile Registry**: Centralized database of linguistic rules for every supported language.
+- **Dynamic Pricing**: Manages persistent state across sessions with real-time token tracking and **Cache Discount** calculation.
 
 ### 6. Web Monitoring Architecture (`web_server.py`, `shared_state.py`, `web/`)
 A high-fidelity, read-only monitoring layer built on **FastAPI** and **WebSockets**, with a **Tailwind CSS V3 Command Center** frontend.
@@ -68,9 +68,9 @@ The AI Judge broadcasts its internal chunking state. For large batches, the UI d
 ---
 
 ## 💾 Data & Persistence
--   **Checkpoints (`.checkpoints/`)**: Every successful batch is saved to a JSON checkpoint, allowing the user to resume an interrupted project instantly.
--   **Translations (`translated subtitles/`)**: Finalized `.srt` output files.
--   **System Prompts (`sysprm files/`)**: Project-specific knowledge bases. Supports seamless custom section sizes by utilizing a dynamic indexing engine to maintain sequence structure. This engine is now used to enforce **Strict Zero-English Policies** and "No-Z" rules by bridging global workflow instructions with project-specific variables.
+-   **Checkpoints (`.checkpoints/`)**: Every successful batch is saved to a JSON checkpoint, allowing the user to resume instantly.
+-   **System Prompts (`sysprm files/`)**: Project-specific knowledge bases. Aegis now enforces a **Strict JSON Format** for all `.sysprm` files. Legacy markdown profiles are no longer supported to ensure 100% structural stability.
+-   **Mandatory Field**: All `.sysprm` files must contain a `language` block with the `use_native_instructions` flag to explicitly define the model's metalanguage.
 
 ---
 

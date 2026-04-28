@@ -5,18 +5,18 @@
 !*.py
 !*.pyw
 
-# Allow main documentation
+!requirements.txt
+!prompt_generator.pyw
+
+# Allow documentation
 !system_overview.md
 !README.md
+!docs/
+!docs/*.md
 
-# Allow this gitignore file
-!.gitignore
-!requirements.txt
-
-# Allow example system prompt (Un-ignore folder structure to allow file whitelist)
+# Allow sysprm files
 !sysprm files/
-sysprm files/*
-!sysprm files/survivor_45_hebrew.sysprm
+!sysprm files/*.sysprm
 
 # Allow screenshots for README
 !screenshots/
@@ -33,10 +33,7 @@ screenshots/*
 # Explicitly ensure sensitive settings are ignored (Safety double-check)
 translator_settings.json
 
-# Ignore internal directories even if they match whitelist rules
+# Internal and translation output
 __pycache__/
 .checkpoints/
 logs/
-sysprm files/
-English subtitles/
-Translated Hebrew subtitles/
