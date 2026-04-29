@@ -16,7 +16,9 @@ Instead of writing complex prompts by hand, use the built-in **Prompt Generator*
 3.  **Configure**: Select your **Source/Target languages** and decide if you want **Native Instructions**.
 4.  **Remarks**: Add any specific names, slang, or style rules.
 5.  **Generate**: Click **"Copy Prompt to Clipboard"**.
-6.  **AI Query**: Paste the result into any high-reasoning LLM (Gemini 1.5 Pro, GPT-4o, Claude 3.5).
+6.  **AI Query**: Paste the result into any high-reasoning LLM.
+    > [!IMPORTANT]
+    > **Use Web-Enabled LLMs**: For the highest quality configurations, use models with active web-search capabilities like **DeepSeek (V3/R1)**, **ChatGPT-4o**, or **Gemini 1.5 Pro**. These models will follow the links in the prompt to "read" the Aegis documentation and research your specific show's cast, tribes, and plot on the web.
 7.  **Drafting**: Click **"📝 Draft .sysprm in Notepad"** in the generator. This creates the correctly named file in the `sysprm files/` folder and opens it for you.
 8.  **Save**: Paste the JSON from the AI into the open Notepad window, **save (Ctrl+S)**, and close it.
 9.  **Edit**: If required, fine-tune the file manually. Refer to high-quality examples like *survivor_46* for the professional standard.
