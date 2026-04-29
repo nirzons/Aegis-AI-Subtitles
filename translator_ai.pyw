@@ -291,10 +291,31 @@ class TranslatorApp:
             self.root.after(500, self._update_web_port_label)
 
     def refresh_files(self):
-        sysprm_files = sorted([f for f in os.listdir(self.sysprm_dir) if f.lower().endswith('.sysprm')])
+        source_code = self.ui.widgets.source_lang_var.get()
+        target_code = self.ui.widgets.target_lang_var.get()
+
+        all_sysprm = sorted([f for f in os.listdir(self.sysprm_dir) if f.lower().endswith('.sysprm')])
+        
+        filtered_sysprm = []
+        for f_name in all_sysprm:
+            path = os.path.join(self.sysprm_dir, f_name)
+            try:
+                # Use utf-8-sig to handle possible BOM
+                with open(path, 'r', encoding='utf-8-sig') as f:
+                    data = json.load(f)
+                    lang_cfg = data.get("language", {})
+                    if lang_cfg.get("source") == source_code and lang_cfg.get("target") == target_code:
+                        filtered_sysprm.append(f_name)
+            except Exception:
+                pass # Skip files that aren't valid JSON or don't match
+
         srt_files = sorted([f for f in os.listdir(self.english_subs_dir) if f.endswith('.srt')])
         self.ui.widgets.srt_combo['values'] = srt_files
-        self.ui.widgets.sysprm_combo['values'] = sysprm_files
+        self.ui.widgets.sysprm_combo['values'] = filtered_sysprm
+        
+        # If current selection is no longer in the list, clear it
+        if self.ui.widgets.sysprm_var.get() not in filtered_sysprm:
+            self.ui.widgets.sysprm_var.set("")
 
         # Scan for Checkpoints
         self.available_checkpoints = []
@@ -339,6 +360,17 @@ class TranslatorApp:
                 self.ui.widgets.resume_combo.current(0)
         
         log(self.log_queue, self.session_log_file, "✅ File lists refreshed.")
+
+    def open_prompt_generator(self):
+        """Launches the prompt_generator.pyw utility."""
+        try:
+            script_path = os.path.join(self.curr_dir, "prompt_generator.pyw")
+            if os.path.exists(script_path):
+                subprocess.Popen([sys.executable, script_path])
+            else:
+                messagebox.showerror("Error", f"Could not find {script_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to launch Prompt Generator: {e}")
 
     def restart_app(self):
         """Cleanly restarts the entire application to reload code changes."""

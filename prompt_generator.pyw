@@ -53,6 +53,7 @@ class PromptGeneratorApp:
         btn_frame.pack(fill=tk.X)
 
         ttk.Button(btn_frame, text="📋 Copy Prompt to Clipboard", command=self.generate_and_copy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="📝 Draft .sysprm in Notepad", command=self.open_sysprm_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="💾 Save Prompt to File", command=self.generate_and_save).pack(side=tk.LEFT, padx=5)
 
     def _apply_styles(self):
@@ -133,6 +134,64 @@ The JSON must include:
             messagebox.showinfo("Success", f"Prompt saved to {filename}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save file: {e}")
+
+    def open_sysprm_draft(self):
+        """Creates an instructional draft file, opens it in Notepad, and then cleans up."""
+        show = self.show_name_var.get().replace(' ', '_').lower()
+        source = self.source_lang_var.get()
+        target = self.target_lang_var.get()
+        ni_suffix = "_ni" if self.native_instr_var.get() else ""
+        
+        filename = f"{show}_{source}_2_{target}{ni_suffix}.sysprm"
+        sysprm_dir = os.path.join(os.getcwd(), "sysprm files")
+        os.makedirs(sysprm_dir, exist_ok=True)
+        
+        filepath = os.path.join(sysprm_dir, filename)
+        
+        instruction_text = (
+            "/* \n"
+            "   STEP 1: Copy the JSON content from the LLM (Gemini/ChatGPT/Claude) \n"
+            "   \n"
+            "   STEP 2: PASTE it here, replacing all this text.\n"
+            "   \n"
+            "   STEP 3: Press Ctrl+S to Save and close this file.\n"
+            "   \n"
+            "   The Aegis engine will then detect this file automatically.\n"
+            "*/\n"
+        )
+        
+        try:
+            # Create the file with instructions
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(instruction_text)
+            
+            import subprocess
+            subprocess.Popen(["notepad.exe", filepath])
+            
+            # --- Ghost File Trick ---
+            # We delete the file shortly after opening. 
+            # Notepad keeps the text in memory. If the user hits Save (Ctrl+S), 
+            # Notepad will realize the file is gone and prompt for 'Save As' 
+            # with the original name pre-filled!
+            def ghost_cleanup():
+                import time
+                import threading
+                time.sleep(2.0) # Wait for Notepad to load the buffer
+                try:
+                    if os.path.exists(filepath):
+                        # Only delete if it's still just the instructions
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            current_content = f.read()
+                        if current_content == instruction_text:
+                            os.remove(filepath)
+                except:
+                    pass
+            
+            import threading
+            threading.Thread(target=ghost_cleanup, daemon=True).start()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create/open draft: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -8,17 +8,18 @@ A `.sysprm` file is the "brain" of an Aegis translation project. It provides the
 ### 1. Using the Prompt Generator Utility (Recommended)
 Instead of writing complex prompts by hand, use the built-in **Prompt Generator** tool:
 
-1.  **Launch**: Run `prompt_generator.pyw` (double-click on Windows).
+1.  **Launch**: Click the **🪄** button next to the SysPrm dropdown in the main Aegis window (or run `prompt_generator.pyw` directly).
 ![Prompt Generator](screenshots/prompt_generator.png)
 2.  **Metadata**: Fill in the **Show / Movie Name**. 
     > [!TIP]
     > **Accuracy is critical.** Include the full name, the specific **Season**, and the **Year of Release** (e.g., *"Survivor Season 46 (2024)"* or *"The Hotel New Hampshire (1984 film)"*). This helps the AI research the correct cast and plot.
-3.  **Configure**: Select your **Source/Target languages** and decide if you want **Native Instructions** (instructions written in the target language).
-4.  **Remarks**: Add any specific names, slang, or style rules (e.g., *"provide a natural, dramatic, and accurate translation."*).
+3.  **Configure**: Select your **Source/Target languages** and decide if you want **Native Instructions**.
+4.  **Remarks**: Add any specific names, slang, or style rules.
 5.  **Generate**: Click **"Copy Prompt to Clipboard"**.
 6.  **AI Query**: Paste the result into any high-reasoning LLM (Gemini 1.5 Pro, GPT-4o, Claude 3.5).
-7.  **Save**: Copy the JSON code block from the AI's response and save it as a `.sysprm` file (e.g., `my_movie.sysprm`) inside the **`sysprm files/`** folder.
-8.  **Edit**: If required, you can manually edit the file to fine-tune characters or terms. Refer to the high-quality examples in the `sysprm files/` directory (like *survivor_46*) to see the pro standard.
+7.  **Drafting**: Click **"📝 Draft .sysprm in Notepad"** in the generator. This creates the correctly named file in the `sysprm files/` folder and opens it for you.
+8.  **Save**: Paste the JSON from the AI into the open Notepad window, **save (Ctrl+S)**, and close it.
+9.  **Edit**: If required, fine-tune the file manually. Refer to high-quality examples like *survivor_46* for the professional standard.
 
 ---
 

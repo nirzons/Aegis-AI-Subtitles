@@ -61,8 +61,11 @@ class MainUILayout:
         # Row 3: System Prompt
         create_label(top_frame, "SysPrm:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
         self.widgets.sysprm_var = tk.StringVar()
-        self.widgets.sysprm_combo = ttk.Combobox(top_frame, textvariable=self.widgets.sysprm_var, state="readonly", width=60)
-        self.widgets.sysprm_combo.grid(row=3, column=1, columnspan=4, padx=5, pady=5, sticky=tk.W)
+        self.widgets.sysprm_combo = ttk.Combobox(top_frame, textvariable=self.widgets.sysprm_var, state="readonly", width=55)
+        self.widgets.sysprm_combo.grid(row=3, column=1, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        
+        self.widgets.btn_prompt_gen = ttk.Button(top_frame, text="🪄", width=3, command=app.open_prompt_generator)
+        self.widgets.btn_prompt_gen.grid(row=3, column=4, padx=5, pady=5, sticky=tk.W)
 
         # Row 4: Judge Model
         create_label(top_frame, "Judge:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
