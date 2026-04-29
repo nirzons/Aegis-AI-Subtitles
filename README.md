@@ -56,7 +56,8 @@ English, Hebrew, Arabic, French, Spanish, German, Chinese, Portuguese, Russian, 
    ```
 4. **Configuration**: 
    - Select **Source** and **Target** languages.
-   - Select your **Model** and **SysPrm** file.
+   - **SysPrm**: Select your project file. If you haven't created one yet, click the **🪄 (Magic Wand)** button next to the dropdown to launch the **Prompt Generator**.
+   - Select your **Model**.
    - Click **🚀 Start**.
 
 ---
