@@ -45,7 +45,7 @@ pip install -r requirements.txt
 2. **Setup Directories**:
    - **Source Directory**: Place your source `.srt` files in a folder named `<Language> subtitles/`. The language name must match one of the supported profiles below.
      *   *Example: `English subtitles/`, `French subtitles/`, `Chinese subtitles/`*
-   - **System Params**: Place your project JSON instructions in the `sysprm files/` folder.
+   - **System Params**: Place your project JSON instructions in the `sysprm files/` folder (See the **[Aegis SysPrm Guide](docs/SYSPRM_GUIDE.md)**).
    - **Translated Output**: The engine automatically creates an output folder named `Translated <Target> subtitles/` (e.g., `Translated Hebrew subtitles/`).
 
 **Supported Language Names (Case Sensitive):**

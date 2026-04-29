@@ -69,7 +69,7 @@ The AI Judge broadcasts its internal chunking state. For large batches, the UI d
 
 ## 💾 Data & Persistence
 -   **Checkpoints (`.checkpoints/`)**: Every successful batch is saved to a JSON checkpoint, allowing the user to resume instantly.
--   **System Prompts (`sysprm files/`)**: Project-specific knowledge bases. Aegis now enforces a **Strict JSON Format** for all `.sysprm` files. Legacy markdown profiles are no longer supported to ensure 100% structural stability.
+-   **System Prompts (`sysprm files/`)**: Project-specific knowledge bases. Aegis now enforces a **Strict JSON Format** for all `.sysprm` files. See the **[Aegis SysPrm Guide](docs/SYSPRM_GUIDE.md)** for setup instructions.
 -   **Mandatory Field**: All `.sysprm` files must contain a `language` block with the `use_native_instructions` flag to explicitly define the model's metalanguage.
 
 ---

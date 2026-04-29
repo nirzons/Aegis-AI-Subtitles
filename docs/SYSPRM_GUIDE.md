@@ -9,7 +9,7 @@ A `.sysprm` file is the "brain" of an Aegis translation project. It provides the
 Instead of writing complex prompts by hand, use the built-in **Prompt Generator** tool:
 
 1.  **Launch**: Click the **🪄** button next to the SysPrm dropdown in the main Aegis window (or run `prompt_generator.pyw` directly).
-![Prompt Generator](screenshots/prompt_generator.png)
+![Prompt Generator](../screenshots/prompt_generator.png)
 2.  **Metadata**: Fill in the **Show / Movie Name**. 
     > [!TIP]
     > **Accuracy is critical.** Include the full name, the specific **Season**, and the **Year of Release** (e.g., *"Survivor Season 46 (2024)"* or *"The Hotel New Hampshire (1984 film)"*). This helps the AI research the correct cast and plot.
