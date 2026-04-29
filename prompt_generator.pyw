@@ -79,6 +79,12 @@ class PromptGeneratorApp:
 **USER REQUIREMENTS & VOCABULARY:**
 {remarks}
 
+**PROJECT REFERENCE & STANDARDS:**
+You can find the official Aegis documentation and high-quality `.sysprm` examples at the project repository:
+`https://github.com/nirzons/Aegis-AI-Subtitles`
+
+Please review the files in the `sysprm files/` directory (especially `survivor_46_english_2_hebrew_ni.sysprm`) to understand the required depth of the dictionary and character mappings.
+
 **INSTRUCTIONS FOR THE LLM:**
 You are an expert subtitle localization engineer. Research the show **{show}** thoroughly and generate a comprehensive JSON configuration. 
 
@@ -104,7 +110,10 @@ The JSON must include:
     "last_speaker": "Unknown",
     "summary": "A brief opening summary of the show's current state.",
     "illegal_labels": [
-        "Include a comprehensive list of ALL character names (source and target) and common speaker labels to be purged. IMPORTANT: Do NOT include the colon (:) character in these labels."
+        "Include a comprehensive list of ALL character names and common speaker labels to be purged.",
+        "IMPORTANT: Include FULL NAMES, INDIVIDUAL NAME PARTS (First, Last), and any common NICKNAMES (e.g. 'Q', 'COACH').",
+        "Include these labels in BOTH {source} and {target} languages.",
+        "Crucial: The auditor uses these for exact substring matching to strip labels like 'JEFF: ' or 'ROB: ' from the text. Do NOT include the colon (:) in these labels."
     ],
     "prompt_prefix": "A professional persona description (e.g. 'You are an expert translator specializing in...') tailored to {show}."
    }}
@@ -136,62 +145,59 @@ The JSON must include:
             messagebox.showerror("Error", f"Failed to save file: {e}")
 
     def open_sysprm_draft(self):
-        """Creates an instructional draft file, opens it in Notepad, and then cleans up."""
+        """Opens existing project file or creates a safe temporary draft."""
         show = self.show_name_var.get().replace(' ', '_').lower()
         source = self.source_lang_var.get()
         target = self.target_lang_var.get()
         ni_suffix = "_ni" if self.native_instr_var.get() else ""
         
-        filename = f"{show}_{source}_2_{target}{ni_suffix}.sysprm"
-        sysprm_dir = os.path.join(os.getcwd(), "sysprm files")
-        os.makedirs(sysprm_dir, exist_ok=True)
+        suggested_filename = f"{show}_{source}_2_{target}{ni_suffix}.sysprm"
         
-        filepath = os.path.join(sysprm_dir, filename)
+        # 1. Check if the real project file already exists
+        sysprm_dir = os.path.join(os.getcwd(), "sysprm files")
+        project_filepath = os.path.join(sysprm_dir, suggested_filename)
+        
+        if os.path.exists(project_filepath):
+            # If it exists, just open the REAL file directly
+            try:
+                import subprocess
+                subprocess.Popen(["notepad.exe", project_filepath])
+                return
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to open existing file: {e}")
+                return
+
+        # 2. If it doesn't exist, create a Safe Temp Draft
+        import tempfile
+        import uuid
+        unique_temp_dir = os.path.join(tempfile.gettempdir(), f"Aegis_{uuid.uuid4().hex[:8]}")
+        os.makedirs(unique_temp_dir, exist_ok=True)
+        
+        temp_filepath = os.path.join(unique_temp_dir, suggested_filename)
         
         instruction_text = (
             "/* \n"
+            f"   DRAFT FOR: {suggested_filename}\n"
+            "   \n"
             "   STEP 1: Copy the JSON content from the LLM (Gemini/ChatGPT/Claude) \n"
             "   \n"
             "   STEP 2: PASTE it here, replacing all this text.\n"
             "   \n"
-            "   STEP 3: Press Ctrl+S to Save and close this file.\n"
-            "   \n"
-            "   The Aegis engine will then detect this file automatically.\n"
+            "   STEP 3: Go to File -> SAVE AS... \n"
+            "   STEP 4: Navigate to your 'sysprm files' folder and save it as:\n"
+            f"           {suggested_filename}\n"
             "*/\n"
         )
         
         try:
-            # Create the file with instructions
-            with open(filepath, "w", encoding="utf-8") as f:
+            with open(temp_filepath, "w", encoding="utf-8") as f:
                 f.write(instruction_text)
             
             import subprocess
-            subprocess.Popen(["notepad.exe", filepath])
-            
-            # --- Ghost File Trick ---
-            # We delete the file shortly after opening. 
-            # Notepad keeps the text in memory. If the user hits Save (Ctrl+S), 
-            # Notepad will realize the file is gone and prompt for 'Save As' 
-            # with the original name pre-filled!
-            def ghost_cleanup():
-                import time
-                import threading
-                time.sleep(2.0) # Wait for Notepad to load the buffer
-                try:
-                    if os.path.exists(filepath):
-                        # Only delete if it's still just the instructions
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            current_content = f.read()
-                        if current_content == instruction_text:
-                            os.remove(filepath)
-                except:
-                    pass
-            
-            import threading
-            threading.Thread(target=ghost_cleanup, daemon=True).start()
+            subprocess.Popen(["notepad.exe", temp_filepath])
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to create/open draft: {e}")
+            messagebox.showerror("Error", f"Failed to create draft: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()

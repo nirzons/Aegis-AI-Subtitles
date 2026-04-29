@@ -206,3 +206,15 @@ def pretty_json(obj):
 
 
 
+def detect_sysprm_language(content):
+    """
+    Scans a SysPrm file content for the 'use_native_instructions' flag.
+    Returns "Native" if true, "English" if false, or "English" (default) if not found/invalid.
+    """
+    try:
+        data = json.loads(content)
+        if data.get("language", {}).get("use_native_instructions"):
+            return "Native"
+    except Exception:
+        pass
+    return "English"

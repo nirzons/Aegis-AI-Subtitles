@@ -173,6 +173,7 @@ class TranslationEngine:
             if not profile:
                 from settings import SETTINGS
                 profile = SETTINGS.get_active_profile()
+            self.profile = profile # Store for secondary methods
             
             # Universalization: Dynamic Regex compilation based on profile
             ranges_str = "".join([f"\\u{s:04x}-\\u{e:04x}" for s, e in profile.target_unicode_ranges])
@@ -1555,7 +1556,7 @@ class TranslationEngine:
                 # The while loop will re-open notepad.
 
     def _parse_intervention_file(self, content, metadata):
-        marker = self.active_profile.native_intervention_target_label if self.active_profile else "TRANSLATED LINES REQUIRING FIX"
+        marker = self.profile.native_intervention_target_label if self.profile else "TRANSLATED LINES REQUIRING FIX"
         if marker not in content:
             return False, None, "Marker section missing"
             
