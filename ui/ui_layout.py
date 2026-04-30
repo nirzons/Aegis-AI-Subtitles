@@ -138,9 +138,9 @@ class MainUILayout:
         self.widgets.lbl_interventions = tk.Label(progress_header, text="", font=("Segoe UI", 8, "italic"), fg="#e74c3c", bg=self.root["bg"])
         self.widgets.lbl_interventions.pack(side=tk.LEFT, padx=5)
 
+        # native_instr_var is kept as a hidden stub; the setting is now driven
+        # exclusively by the 'use_native_instructions' field in the .sysprm file.
         self.widgets.native_instr_var = tk.BooleanVar(value=False)
-        self.widgets.chk_native_instr = ttk.Checkbutton(progress_header, text="🌐 Native Instructions", variable=self.widgets.native_instr_var, command=app.on_language_change)
-        self.widgets.chk_native_instr.pack(side=tk.LEFT, padx=20)
 
         progress_frame = ttk.LabelFrame(self.root, labelwidget=progress_header)
         progress_frame.pack(fill=tk.X, padx=15, pady=5)

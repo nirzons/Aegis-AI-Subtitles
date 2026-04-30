@@ -879,6 +879,9 @@ class TranslationEngine:
                                 log(self.log_queue, session_log_file, f"✨ [Alignment Passthrough] Restored {{\\anX}} for {al_restored} lines.")
 
                             # --- Auditing & Judging Pipeline ---
+                            # Inject illegal_labels into config so audit_manager can access it.
+                            # (It's built from the sysprm series_context and stored on the engine instance.)
+                            config["illegal_labels"] = getattr(self, 'illegal_labels', [])
                             batch_passed, last_judge_error, last_judged_indices, j_cost_delta, previous_overlong_indices = run_audit_pipeline(
                                 indices=indices,
                                 input_payload=input_payload,
@@ -1118,11 +1121,16 @@ class TranslationEngine:
                             log(self.log_queue, session_log_file, f"📌 Effective batch size → {effective_batch_size} (penultimate size after retries; following chunks start here)")
                         current_index += expected_count
 
+                        # ── Re-sync processed from stats (updated by _finalize_batch_success) ──
+                        # This MUST happen before the checkpoint write and the UI update.
+                        processed = stats.get("processed_total", processed)
+
                         # ── Update accumulated elapsed time & write checkpoint ─
                         stats["total_elapsed_seconds"] = elapsed_at_session_start + (time.time() - session_start_time)
                         checkpoint_data = build_checkpoint_payload(
                             config, current_index, processed, total_blocks, total_main_cost, total_judge_cost, 
-                            context_state, profile, stats, output_file
+                            context_state, profile, stats, output_file,
+                            effective_batch_size=effective_batch_size
                         )
                         save_checkpoint(current_checkpoint_file, checkpoint_data)
                     
@@ -1324,11 +1332,14 @@ class TranslationEngine:
         context_state['continuity_note'] = res_json.get('continuity_note', context_state.get('continuity_note'))
         if indices:
             last_idx = indices[-1]
-            context_state['last_two_lines_heb'] = [received_dict[last_idx]]
+            # Use canonical key 'last_two_lines_target' (purge legacy 'last_two_lines_heb' alias)
+            context_state['last_two_lines_target'] = [received_dict[last_idx]]
+            context_state.pop('last_two_lines_heb', None)
 
         # Stats and batch progress
         stats["processed_total"] = stats.get("processed_total", 0) + expected_count
         stats["total_batches_succeeded"] += 1
+        _inc_by_size(stats["clean_passes_by_size"], expected_count)
         
         # Linguistic Telemetry
         linc = stats.setdefault("linguistics", {})

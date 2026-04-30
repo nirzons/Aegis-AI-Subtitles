@@ -106,7 +106,6 @@ class TranslatorApp:
         trans_cfg = SETTINGS.config.get("translation", {})
         self.ui.widgets.source_lang_var.set(trans_cfg.get("source_lang_code", "en"))
         self.ui.widgets.target_lang_var.set(trans_cfg.get("target_lang_code", "he"))
-        self.ui.widgets.native_instr_var.set(trans_cfg.get("use_native_instructions", False))
         
         self.on_language_change() # Trigger initial output_dir sync
 
@@ -120,7 +119,6 @@ class TranslatorApp:
             
         SETTINGS.config["translation"]["source_lang_code"] = source
         SETTINGS.config["translation"]["target_lang_code"] = target_code
-        SETTINGS.config["translation"]["use_native_instructions"] = self.ui.widgets.native_instr_var.get()
         SETTINGS.save_settings()
 
         # 2. Now fetch the profile (it will reflect the new target_code)
@@ -453,7 +451,14 @@ class TranslatorApp:
                 detected_lang_type = detect_sysprm_language(sys_content) # "English" or "Native"
                 
                 profile = SETTINGS.get_active_profile()
-                use_native = self.ui.widgets.native_instr_var.get()
+                # use_native is now read from the sysprm file itself, not the UI.
+                # The engine will set profile.use_native_instructions from the sysprm JSON.
+                # Here we just detect the content type for cross-checks.
+                try:
+                    sysprm_json = json.loads(sys_content.lstrip('\ufeff'))
+                    use_native = bool(sysprm_json.get("language", {}).get("use_native_instructions", False))
+                except Exception:
+                    use_native = (detected_lang_type == "Native")
                 
                 sys_name_lower = sys_name.lower()
                 source_lang_name = profile.source_lang.lower()
@@ -475,14 +480,6 @@ class TranslatorApp:
                 # Check for "<source>_2_<target>" pattern
                 mismatch = False
                 mismatch_reason = ""
-                
-                # 1. Native vs English content check
-                if detected_lang_type == "English" and use_native:
-                    mismatch_reason = f"English .sysprm file detected, but 'Native Instructions' is ON for {profile.target_lang}."
-                    mismatch = True
-                elif detected_lang_type == "Native" and not use_native:
-                    mismatch_reason = f"Native .sysprm file detected, but 'Native Instructions' is OFF for {profile.target_lang}."
-                    mismatch = True
                 
                 # 2. Filename Source/Target check (Modern format: ..._source_2_target...)
                 if not mismatch and "_2_" in sys_name_lower:

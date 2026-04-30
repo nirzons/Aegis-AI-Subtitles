@@ -48,14 +48,14 @@ def cleanup_checkpoint(checkpoint_file):
             return False
     return False
 
-def build_checkpoint_payload(config, current_index, processed, total_blocks, total_main_cost, total_judge_cost, context_state, profile, stats, output_file):
+def build_checkpoint_payload(config, current_index, processed, total_blocks, total_main_cost, total_judge_cost, context_state, profile, stats, output_file, effective_batch_size=None):
     """Assembles the full checkpoint dictionary."""
     return {
         "pid": os.getpid(),
         "model_choice": config["model_choice"],
         "judge_model_choice": config["judge_model_choice"],
         "batch_size": config["batch_size"],
-        "effective_batch_size": config.get("effective_batch_size", config["batch_size"]),
+        "effective_batch_size": effective_batch_size if effective_batch_size is not None else config["batch_size"],
         "judge_batch_size": config["judge_batch_size"],
         "sys_file": config["sys_name"],
         "srt_file": config["srt_name"],
@@ -72,6 +72,7 @@ def build_checkpoint_payload(config, current_index, processed, total_blocks, tot
         "max_words_per_line": profile.max_words_per_line,
         "stats": stats,
     }
+
 
 def restore_profile_from_checkpoint(profile, checkpoint_data):
     """Restores language profile settings from checkpoint metadata."""

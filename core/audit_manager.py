@@ -35,7 +35,7 @@ def run_audit_pipeline(
     strip_music_glyphs_batch(received_dict)
 
     # 3. Heuristic Audit
-    illegal_labels = config.get("context_state", {}).get("illegal_labels", [])
+    illegal_labels = config.get("illegal_labels", [])
     is_suspicious, audit_reason, native_audit_reason, skip_judge = check_heuristics(
         input_payload, received_dict, illegal_labels=illegal_labels, profile=profile
     )
