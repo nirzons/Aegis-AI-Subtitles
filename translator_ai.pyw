@@ -970,6 +970,16 @@ class TranslatorApp:
         target.see(tk.END)
 
 if __name__ == "__main__":
+    import sys
     root = tk.Tk()
     app = TranslatorApp(root)
+    
+    if "--smoke_test" in sys.argv:
+        print("Smoke test started...")
+        def run_smoke_test():
+            print("smoke test passed")
+            root.destroy()
+            sys.exit(0)
+        root.after(2000, run_smoke_test)
+        
     root.mainloop()
