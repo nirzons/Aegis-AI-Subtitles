@@ -4,7 +4,7 @@ import json
 import os
 
 # Internal Modules
-from language_profiles import BUILT_IN_PROFILES
+from core.language_profiles import BUILT_IN_PROFILES
 
 class PromptGeneratorApp:
     def __init__(self, root):

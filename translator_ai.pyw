@@ -11,16 +11,16 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 # Internal Modules
-from settings import SETTINGS
-from llm_api import is_process_alive
-from gui_windows import LiveViewer, SettingsWindow, CheckpointsWindow
-from app_utils import log, format_cost_display, get_eta_string
-from ui_layout import MainUILayout
-from translation_engine import TranslationEngine
+from utils.settings import SETTINGS
+from core.llm_api import is_process_alive
+from ui.gui_windows import LiveViewer, SettingsWindow, CheckpointsWindow
+from utils.app_utils import log, format_cost_display, get_eta_string
+from ui.ui_layout import MainUILayout
+from core.translation_engine import TranslationEngine
 
 # Web GUI Modules
-from shared_state import SharedState
-from web_server import start_web_server
+from utils.shared_state import SharedState
+from services.web_server import start_web_server
 
 
 class TranslatorApp:
@@ -65,7 +65,10 @@ class TranslatorApp:
         for d in [self.english_subs_dir, self.sysprm_dir, self.output_dir, self.logs_dir, self.checkpoint_dir]:
             os.makedirs(d, exist_ok=True)
             
-        self.session_log_file = os.path.join(self.logs_dir, f"session_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        if "--smoke_test" in sys.argv:
+            self.session_log_file = None
+        else:
+            self.session_log_file = os.path.join(self.logs_dir, f"session_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
         self.available_checkpoints = []
 
         # Web GUI State (Moved UP so the engine can access it)
@@ -94,7 +97,7 @@ class TranslatorApp:
     # --- UI Event Handlers ---
 
     def refresh_languages_ui(self):
-        from language_profiles import BUILT_IN_PROFILES
+        from core.language_profiles import BUILT_IN_PROFILES
         codes = sorted(BUILT_IN_PROFILES.keys())
         self.ui.widgets.source_combo['values'] = codes
         self.ui.widgets.target_combo['values'] = codes
@@ -103,6 +106,7 @@ class TranslatorApp:
         trans_cfg = SETTINGS.config.get("translation", {})
         self.ui.widgets.source_lang_var.set(trans_cfg.get("source_lang_code", "en"))
         self.ui.widgets.target_lang_var.set(trans_cfg.get("target_lang_code", "he"))
+        self.ui.widgets.native_instr_var.set(trans_cfg.get("use_native_instructions", False))
         
         self.on_language_change() # Trigger initial output_dir sync
 
@@ -116,6 +120,7 @@ class TranslatorApp:
             
         SETTINGS.config["translation"]["source_lang_code"] = source
         SETTINGS.config["translation"]["target_lang_code"] = target_code
+        SETTINGS.config["translation"]["use_native_instructions"] = self.ui.widgets.native_instr_var.get()
         SETTINGS.save_settings()
 
         # 2. Now fetch the profile (it will reflect the new target_code)
@@ -409,7 +414,7 @@ class TranslatorApp:
             return
 
         # --- Pre-Flight Connectivity Checks ---
-        from llm_api import ping_model
+        from core.llm_api import ping_model
         log(self.log_queue, getattr(self, 'session_log_file', None), f"🔌 Testing connectivity for {model_cfg.get('name', 'Main Model')}...")
         ok, msg = ping_model(model_cfg)
         if not ok:
@@ -444,7 +449,7 @@ class TranslatorApp:
                 with open(sys_path, 'r', encoding='utf-8-sig') as f:
                     sys_content = f.read()
                 
-                from app_utils import detect_sysprm_language
+                from utils.app_utils import detect_sysprm_language
                 detected_lang_type = detect_sysprm_language(sys_content) # "English" or "Native"
                 
                 profile = SETTINGS.get_active_profile()
@@ -455,10 +460,10 @@ class TranslatorApp:
                 target_lang_name = profile.target_lang.lower()
                 
                 lang_variants = {
-                    "hebrew": ["hebrew", "heb", "עברית"],
-                    "french": ["french", "fra", "fre", "צרפתית"],
-                    "spanish": ["spanish", "esp", "ספרדית"],
-                    "english": ["english", "eng", "אנגלית"],
+                    "hebrew": ["hebrew", "heb", "he", "עברית"],
+                    "french": ["french", "fra", "fre", "fr", "צרפתית"],
+                    "spanish": ["spanish", "esp", "es", "ספרדית"],
+                    "english": ["english", "eng", "en", "אנגלית"],
                     "chinese": ["chinese", "zh", "chi", "סינית"],
                     "portuguese": ["portuguese", "port", "pt", "פורטוגזית"],
                     "russian": ["russian", "ru", "rus", "רוסית"],
@@ -493,10 +498,10 @@ class TranslatorApp:
                             source_expected = lang_variants.get(source_lang_name, [source_lang_name])
                             target_expected = lang_variants.get(target_lang_name, [target_lang_name])
                             
-                            if not any(k in file_source for k in source_expected):
+                            if not any(k in file_source or file_source in k for k in source_expected):
                                 mismatch_reason = f"Source language mismatch: Selected {profile.source_lang} but SysPrm says '{file_source}'."
                                 mismatch = True
-                            elif not any(k in file_target for k in target_expected):
+                            elif not any(k in file_target or file_target in k for k in target_expected):
                                 mismatch_reason = f"Target language mismatch: Selected {profile.target_lang} but SysPrm says '{file_target}'."
                                 mismatch = True
                     except Exception: pass # Fallback to keyword check if parsing fails
@@ -975,11 +980,34 @@ if __name__ == "__main__":
     app = TranslatorApp(root)
     
     if "--smoke_test" in sys.argv:
-        print("Smoke test started...")
+        print("Smoke test: Initializing integrity checks...")
         def run_smoke_test():
-            print("smoke test passed")
-            root.destroy()
-            sys.exit(0)
+            try:
+                # 1. Widget Integrity Check (Ensures no UI elements were lost during migration)
+                required_widgets = [
+                    'source_combo', 'target_combo', 'model_combo', 'srt_combo', 
+                    'sysprm_combo', 'judge_model_combo', 'resume_combo',
+                    'native_instr_var', 'debug_var', 'web_gui_var', 
+                    'bypass_intervention_var', 'progress_bar', 'log_text'
+                ]
+                for attr in required_widgets:
+                    if not hasattr(app.ui.widgets, attr):
+                        raise AttributeError(f"UI Error: Widget '{attr}' is missing from layout.")
+                
+                # 2. Module Import Check (Ensures core packages are reachable)
+                import core.translation_engine
+                import core.llm_api
+                import utils.app_utils
+                import utils.settings
+                import services.web_server
+                
+                print("smoke test passed")
+                root.destroy()
+                sys.exit(0)
+            except Exception as e:
+                print(f"SMOKE TEST FAILED: {e}")
+                root.destroy()
+                sys.exit(1)
         root.after(2000, run_smoke_test)
         
     root.mainloop()
