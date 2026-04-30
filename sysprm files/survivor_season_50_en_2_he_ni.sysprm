@@ -3,7 +3,7 @@
     "source": "en",
     "target": "he",
     "use_native_instructions": true,
-    "max_words_per_line": 7
+    "max_words_per_line": 8
   },
   "series_context": [
     "### 1. שחקנים ומגדר ###",

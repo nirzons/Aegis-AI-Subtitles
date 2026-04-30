@@ -1,9 +1,19 @@
 # Ignore everything by default
 /*
 
-# Allow Python source files (root directory)
+# Allow Python source files and modular packages
 !*.py
 !*.pyw
+!core/
+!ui/
+!utils/
+!services/
+!tests/
+!core/**
+!ui/**
+!utils/**
+!services/**
+!tests/**
 
 !requirements.txt
 !prompt_generator.pyw
