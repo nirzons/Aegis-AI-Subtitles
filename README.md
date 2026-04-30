@@ -19,9 +19,10 @@ With the built-in **Live Viewer**, you can audit the translation process in real
 - **⚖️ AI Judge System**: A dedicated "Judge" model semantically verifies suspicious translations, detecting hallucinations, omissions, and language leakage.
 - **🛡️ Heuristic Auditor**: A high-speed deterministic scanner that enforces line-length constraints, SDH removal, and dynamic speaker name deletion. It automatically adjusts between **word-based** and **character-based (CJK)** counting.
 - **🩹 Self-Healing & Resilience**: Path-breaking schema inference that recovers translations from hallucinated JSON keys—optimized specifically for high-reasoning models like GPT-5/o1.
-- **💰 Cost-Optimized**: Native support for prompt caching (GPT-5, DeepSeek 90% discount) with real-time token tracking and hit-ratio logs.
-- **🔄 Hot Resume**: Seamlessly stop, tune parameters (batch sizes, models), and resume without losing session history.
+- **💰 Cost-Optimized**: Native support for prompt caching (GPT-5, DeepSeek 90% discount) with real-time token tracking, hit-ratio logs, and reasoning-load metrics.
+- **🔄 Hot Resume**: Seamlessly stop, tune parameters (batch sizes, models), and resume without losing session history—powered by a robust checkpointing system.
 - **🌐 Web Dashboard (V3 Command Center)**: A full-featured remote monitoring console accessible from any device on your local network.
+- **🏗️ Modular Architecture**: Fully refactored for the GPT-5 era, with decoupled core logic, auditing, and UI layers for maximum stability and speed.
 
 ---
 
@@ -64,11 +65,14 @@ English, Hebrew, Arabic, French, Spanish, German, Chinese, Portuguese, Russian, 
 
 ## 📖 Under the Hood
 
-### 1. Language Profiles
-Aegis uses a dynamic profile system that automatically handles RTL (Right-to-Left) text, Unicode ranges, and linguistic density ratios. CJK languages (Chinese, Japanese) use character-based auditing to ensure perfect subtitle pacing.
+### 1. Modular Architecture
+Aegis is built on a decoupled architecture where the **Translation Engine** (`core/`) is isolated from the **User Interface** (`ui/`) and **External Services** (`services/`). This allows for high-performance multi-threading and ensures the UI remains responsive even during heavy LLM processing.
 
-### 2. The Heuristic Shield
-A deterministic auditor that runs before any AI check. It catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long. During retries, it injects the **exact offending word** into the feedback loop to force compliance.
+### 2. Language Profiles
+Aegis uses a dynamic profile system (`core/language_profiles.py`) that automatically handles RTL (Right-to-Left) text, Unicode ranges, and linguistic density ratios. CJK languages (Chinese, Japanese) use character-based auditing to ensure perfect subtitle pacing.
+
+### 3. The Heuristic Shield
+A deterministic auditor (`core/audit_manager.py` & `core/text_processing.py`) that runs before any AI check. It catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long. During retries, it injects the **exact offending word** into the feedback loop to force compliance.
 
 ---
 
