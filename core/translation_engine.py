@@ -33,6 +33,7 @@ from core.session_manager import (
     get_next_checkpoint_file, resolve_checkpoint_paths, save_checkpoint,
     cleanup_checkpoint, build_checkpoint_payload, restore_profile_from_checkpoint
 )
+from core.audit_manager import run_audit_pipeline
 
 
 class TranslationEngine:
@@ -122,39 +123,6 @@ class TranslationEngine:
 
         return res_json['translated_srt']
 
-    def _sanitize_ghost_fragments(self, received_dict, stats, session_log_file, profile):
-        """
-        Sanitizes post-LLM artifacts, specifically:
-        1. Improperly escaped newlines (e.g. literal '\\n')
-        2. English 'Ghost Character' echoes (where the LLM accidentally prints the first letter of
-           the original English word immediately following a line break before switching back to Hebrew).
-        """
-        changes_detected = []
-        repaired_ghost_indices = []
-        for idx in received_dict:
-            original_val = str(received_dict[idx])
-            
-            # Convert raw `\\n` literals back into standard line breaks
-            cleaned_val = self.re_newline_cleanup.sub('\n', original_val)
-            
-            # Target \n followed by 1-2 english letters, stripping out the stray English chunk
-            if not profile.target_uses_latin_script:
-                if self.re_ghost_chars.search(cleaned_val):
-                    cleaned_val = self.re_ghost_chars.sub('\n', cleaned_val)
-                    repaired_ghost_indices.append(idx)
-        
-            if cleaned_val != original_val:
-                changes_detected.append(idx)
-                received_dict[idx] = cleaned_val
-
-        # Log internal state fixes
-        if changes_detected:
-            if repaired_ghost_indices:
-                log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Removed English ghost fragments in indices: {', '.join(repaired_ghost_indices)}")
-            log(self.log_queue, session_log_file, f"🧹 [Sanitizer] Fixed escaped line breaks or formatting in indices: {', '.join(changes_detected)}")
-            stats["sanitizer_fixes"] += 1
-            
-        return changes_detected, repaired_ghost_indices
 
     def run_translation(self, config):
         try:
@@ -910,209 +878,34 @@ class TranslationEngine:
                             if al_restored > 0 and getattr(self, 'debug_mode', False):
                                 log(self.log_queue, session_log_file, f"✨ [Alignment Passthrough] Restored {{\\anX}} for {al_restored} lines.")
 
-                            changes_detected, repaired_ghost_indices = self._sanitize_ghost_fragments(received_dict, stats, session_log_file, profile)
+                            # --- Auditing & Judging Pipeline ---
+                            batch_passed, last_judge_error, last_judged_indices, j_cost_delta, previous_overlong_indices = run_audit_pipeline(
+                                indices=indices,
+                                input_payload=input_payload,
+                                received_dict=received_dict,
+                                config=config,
+                                profile=profile,
+                                stats=stats,
+                                log_queue=self.log_queue,
+                                ui_queue=self.ui_queue,
+                                session_log_file=session_log_file,
+                                shared_state=self.shared_state,
+                                previous_overlong_indices=previous_overlong_indices,
+                                current_batch_size=current_batch_size,
+                                ordered_srt_indices=ordered_srt_indices,
+                                eng_by_index=eng_by_index,
+                                translated_target_by_index=translated_target_by_index,
+                                calculate_costs_func=self._calculate_costs,
+                                push_eta_func=push_eta
+                            )
 
-                            for idx in indices:
-                                if idx not in received_dict:
-                                    raise ValueError(f"Sync Error: Key '{idx}' missing")
+                            if not batch_passed:
+                                raise ValueError("Audit/Judge Rejection")
 
-                            strip_music_glyphs_batch(received_dict)
-
-                            illegal_labels = context_state.get("illegal_labels", [])
-                            is_suspicious, audit_reason, native_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels, profile=profile)
-                            
-                            # Forced Escalation for Repairs
-                            if changes_detected:
-                                is_suspicious = True
-                                if profile.use_native_instructions:
-                                    indices_str = ','.join(repaired_ghost_indices)
-                                    repair_note = profile.native_repair_note_ghost.replace("{indices}", indices_str) if repaired_ghost_indices else profile.native_repair_note_newline
-                                    native_audit_reason = f"{repair_note}; {native_audit_reason}" if native_audit_reason else repair_note
-                                    audit_reason = f"Repaired by Sanitizer; {audit_reason}" if audit_reason else "Repaired by Sanitizer"
-                                else:
-                                    repair_note = f"IDX:{','.join(repaired_ghost_indices)}|Auto-repair applied to remove source language ghost fragments. Verify the sentence flows naturally." if repaired_ghost_indices else "GLOBAL|Auto-repair applied to line format (\\n)."
-                                    audit_reason = f"Repaired by Sanitizer; {audit_reason}" if audit_reason else "Repaired by Sanitizer"
-                                    native_audit_reason = f"{repair_note}; {native_audit_reason}" if native_audit_reason else repair_note
-
-                            if is_suspicious:
-                                this_attempt_auditor_flagged = True  # mark for clean-pass tracking
-
-                                if not batch_diagnostics_logged:
-                                    file_log(session_log_file, f"--- BATCH {indices[0] if indices else '?'}-{indices[-1] if indices else '?'} DIAGNOSTICS (PRIMARY) ---")
-                                    file_log(session_log_file, f"SYSTEM PROMPT:\n{_batch_system_prompt}")
-                                    file_log(session_log_file, f"USER PROMPT:\n{_batch_user_prompt}")
-                                    file_log(session_log_file, f"RAW LLM RESPONSE:\n{raw_res}\n--------------------------------------")
-                                    batch_diagnostics_logged = True
-
-                                if skip_judge:
-                                    # If we have a native note from the auditor, use it.
-                                    # If it's empty (because we sent to judge), we'll use judge results later.
-                                    selected_audit_reason = native_audit_reason
-                                    parsed_audit_map = {}
-                                    if selected_audit_reason:
-                                        for p in selected_audit_reason.split("; "):
-                                            if "|" in p:
-                                                scope, msg = p.split("|", 1)
-                                                if scope.startswith("IDX:"):
-                                                    idx_list = scope[4:].split(",")
-                                                    for idx_val in idx_list:
-                                                        parsed_audit_map[idx_val] = parsed_audit_map.get(idx_val, "") + msg + " "
-                                                else:
-                                                    parsed_audit_map["GLOBAL"] = parsed_audit_map.get("GLOBAL", "") + msg + " "
-                                            else:
-                                                if p.strip():
-                                                    parsed_audit_map["GENERAL"] = parsed_audit_map.get("GENERAL", "") + p + " "
-                                        
-                                        # Cleanup extra spaces
-                                        parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
-                                    
-                                    # === NEW: Stubbornness Fallback (Auto-Correction) ===
-                                    # If we are in a minimal batch (2) and auditor detects the same word-length issue, repair automatically.
-                                    fixed_any = False
-                                    if current_batch_size == 2:
-                                        overlong_pattern = profile.overlong_word
-                                        overlong_in_this_attempt = {idx for idx, msg in parsed_audit_map.items() if (overlong_pattern in msg)}
-                                        
-                                        # If the index already appeared as "too long" in the previous attempt of this batch
-                                        indices_to_fix = overlong_in_this_attempt.intersection(previous_overlong_indices)
-                                        
-                                        if indices_to_fix:
-                                            for idx_to_fix in indices_to_fix:
-                                                # Ensure this is the only error for this index (to not miss hallucinations or English)
-                                                err_msg = parsed_audit_map[idx_to_fix].strip()
-                                                
-                                                is_only_overlong = (profile.overlong_phrase in err_msg)
-
-                                                if is_only_overlong:
-                                                    old_text = received_dict[idx_to_fix]
-                                                    new_text = force_split_overlong_line(old_text)
-                                                    if new_text != old_text:
-                                                        received_dict[idx_to_fix] = new_text
-                                                        fixed_any = True
-                                                        log_msg = (profile.native_stubborn_split_log if profile.use_native_instructions else "💡 Stubborn model detected. Applying programmatic split for index {idx}.").replace("{idx}", str(idx_to_fix))
-                                                        log(self.log_queue, session_log_file, log_msg)
-                                        
-                                        # Update memory for next attempt
-                                        previous_overlong_indices = overlong_in_this_attempt
-
-                                    if fixed_any:
-                                        # Rerun auditor to see if repair was enough
-                                        is_suspicious, audit_reason, native_audit_reason, skip_judge = check_heuristics(input_payload, received_dict, illegal_labels=illegal_labels, profile=profile)
-                                        if not is_suspicious:
-                                            # Auto-repair worked! Continue as if all is well.
-                                            log_msg = profile.native_stubborn_resolved_log if profile.use_native_instructions else "✅ Programmatic split resolved the issue. Proceeding..."
-                                            log(self.log_queue, session_log_file, log_msg)
-                                            # We don't raise ValueError, so the loop continues to 'batch_success = True' eventually
-                                        elif not skip_judge:
-                                            # Repair helped partially but still needs judge
-                                            pass 
-                                        else:
-                                            # Still requires retry (maybe another issue popped up)
-                                            last_judge_error = parsed_audit_map
-                                            last_judged_indices = set(indices)
-                                            _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
-                                            log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
-                                            raise ValueError(f"Heuristic Rejection (post-fix): {audit_reason}")
-                                    else:
-                                        last_judge_error = parsed_audit_map
-                                        last_judged_indices = set(indices)
-                                        _inc_by_size(stats["auditor_skip_judge"], current_batch_size)
-                                        log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Immediate retry (skipping Judge).")
-                                        # V3 Audit Hook: Auditor Rejection Ruling
-                                        if self.shared_state:
-                                            self.shared_state.update_audit(last_decision="Auditor: Failed & Retry", batch_trend=-1)
-                                        raise ValueError(f"Heuristic Rejection (skip judge): {audit_reason}")
-
-                                _inc_by_size(stats["auditor_sent_to_judge"], current_batch_size)
-                                log(self.log_queue, session_log_file, f"🔍 Auditor Flag: {audit_reason}. Calling Judge...")
-                                # V3 Audit Hook: Auditor Passing Ruling
-                                if self.shared_state:
-                                    self.shared_state.update_audit(last_decision="Auditor: Sent to Judging", batch_trend=0)
-                                self.ui_queue.put(("judge_start", None))
-                                
-                                judge_cfg = config["judge_cfg"]
-                                judge_api_key = config["judge_api_key"]
-                                judge_batch_size = config["judge_batch_size"]
-                                
-                                j_start = time.time()
-                                is_valid, judge_reason, j_in, j_out, j_cached, j_reasoning = call_llm_judge(
-                                    judge_cfg, indices, input_payload, received_dict, judge_api_key,
-                                    judge_batch_size=judge_batch_size,
-                                    ordered_srt_indices=ordered_srt_indices,
-                                    eng_by_index=eng_by_index,
-                                    target_completed_by_index=translated_target_by_index,
-                                    log_func=lambda m: log(self.log_queue, session_log_file, m),
-                                    file_log_func=lambda m: file_log(session_log_file, m),
-                                    audit_reason_native=native_audit_reason,
-                                    progress_func=lambda c, t: self.ui_queue.put(("judge_progress", (c, t))),
-                                    ui_queue=self.ui_queue,
-                                    debug_mode=getattr(self, 'debug_mode', False),
-                                    profile=profile
-                                )
-                                self.ui_queue.put(("judge_stop", None))
-                                push_eta()  # ETA rises to reflect judge audit time
-
-                                # ── Track judge activity ───────────────────
-                                _inc_by_size(stats["judge_invocations"], current_batch_size)
-                                # ──────────────────────────────────────────
-                                
-                                # JUDGE Cost Calculation
-                                j_cost, j_hit_str, j_hit_pct, j_brain_str = self._calculate_costs(j_in, j_out, j_cached, j_reasoning, judge_cfg)
-
-                                total_judge_cost += j_cost
-                                
-                                # Immediate GUI update
-                                self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
-                                if self.shared_state:
-                                    self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
-                                
-                                # Immediate Terminal logging
-                                log(self.log_queue, session_log_file, f"⚖️ [Judge Model] Batch: {fmt_val(j_cost)} (In: {j_in:,}{j_hit_str} / Out: {j_out:,}{j_brain_str}) | Total Judge: {fmt_val(total_judge_cost)}")
-                                file_log(session_log_file, f"⚖️ Judge Stats (Batch {indices[0]}-{indices[-1]}) - Tokens: In {j_in:,} / Out {j_out:,}{j_brain_str} | Total Judge: {fmt_val(total_judge_cost)}")
-
-                                if not is_valid:
-                                    if judge_reason == "FAILED":
-                                        # Judge itself errored — declare ruling as FAILED and use auditor output as retry feedback
-                                        log(self.log_queue, session_log_file, "   ↳ ❌ Judge ruling: FAILED (judge error). Retrying with auditor feedback.")
-                                        parsed_audit_map = {}
-                                        for p in native_audit_reason.split("; "):
-                                            if "|" in p:
-                                                scope, msg = p.split("|", 1)
-                                                if scope.startswith("IDX:"):
-                                                    idx_list = scope[4:].split(",")
-                                                    for idx_val in idx_list:
-                                                        parsed_audit_map[idx_val] = parsed_audit_map.get(idx_val, "") + msg + " "
-                                                else:
-                                                    parsed_audit_map["GLOBAL"] = parsed_audit_map.get("GLOBAL", "") + msg + " "
-                                            else:
-                                                if p.strip():
-                                                    parsed_audit_map["GENERAL"] = parsed_audit_map.get("GENERAL", "") + p + " "
-                                        parsed_audit_map = {k: v.strip() for k, v in parsed_audit_map.items()}
-                                        last_judge_error = parsed_audit_map
-                                        _inc_by_size(stats["judge_failed_errors"], current_batch_size)
-                                    else:
-                                        # Normal judge rejection — use judge's error map as feedback
-                                        last_judge_error = judge_reason
-                                        _inc_by_size(stats["judge_rejections"], current_batch_size)
-                                    
-                                    # V3 Audit Hook: Judge Rejection Ruling
-                                    if self.shared_state:
-                                        self.shared_state.update_audit(last_decision="Judge: Failed & Retry", batch_trend=-1)
-
-                                    last_judged_indices = set(indices)
-                                    raise ValueError("Judge Rejection")
-                                else:
-                                    last_judge_error = ""
-                                    last_judged_indices = set()
-                                    _inc_by_size(stats["judge_approvals"], current_batch_size)
-                                    _inc_by_size(stats["judge_approved_passes_by_size"], current_batch_size)
-                                    
-                                    # V3 Audit Hook: Judge Approval Ruling
-                                    if self.shared_state:
-                                        self.shared_state.update_audit(last_decision="Judge: Approved", batch_trend=1)
-
-                                    msg = f"✅ Judge Approved: {judge_reason}" if judge_reason and judge_reason != {} else "✅ Judge Approved"
-                                    log(self.log_queue, session_log_file, msg)
+                            total_judge_cost += j_cost_delta
+                            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
+                            if self.shared_state:
+                                self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
 
                             self._finalize_batch_success(
                                 original_metadata, received_dict, f_out, 
