@@ -511,7 +511,8 @@ class TranslationEngine:
                         
                         text_chunk_parts = []
                         if prev_context_blocks: 
-                            text_chunk_parts.append(f"### [{profile.label_prev_context} - DO NOT TRANSLATE] ###\n{strip_srt(prev_context_blocks)}\n")
+                            suffix = profile.label_do_not_translate
+                            text_chunk_parts.append(f"### [{profile.label_prev_context} - {suffix}] ###\n{strip_srt(prev_context_blocks)}\n")
                         
                         input_payload = { m['index']: m['text'] for m in original_metadata }
                         pipeline_load = sum(len(str(v)) for v in input_payload.values())

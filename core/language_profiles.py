@@ -278,6 +278,11 @@ BUILT_IN_PROFILES = {
             "field_desc_is_rejected": "True אם נפסל (נמצאה שגיאה). False אם ללא רבב.",
             "field_desc_error_map": "תיאור השגיאה (משפט מלא). השאר ריק אם ללא רבב."
         },
+        "native_user_prompt_prefix": "אתה מתרגם כעת את הבאץ' הבא. זכור: הפלט חייב להיות בעברית בלבד.",
+        "native_special_instructions_header": "### הוראות מיוחדות לבאץ' זה (באחריותך!) ###",
+        "native_technical_rules_header": "### חוקים טכניים מחייבים ###",
+        "native_exact_count_rule": "1. כמות מדויקת: **עליך להחזיר בדיוק {expected_count} מפתחות באובייקט 'translated_srt'.**",
+        "native_exact_indices_rule": "2. אינדקסים מדויקים: השתמש בדיוק באינדקסים הבאים כמפתחות: {indices}.",
         "native_index_label": "אינדקס",
         "native_feedback_header": "### חובה לתקן את השגיאות הבאות לפי אינדקס (אל תחזור על טעויות אלו): ###",
         "native_last_line_label": "שורה אחרונה שתורגמה (מהבאץ' הקודם): '{last_line}'",
@@ -598,7 +603,11 @@ def get_profile(source_code: str, target_code: str) -> LanguageProfile:
         native_intervention_target_label=target_info.get("native_intervention_target_label", "TRANSLATED LINES REQUIRING FIX"),
         native_intervention_edit_warning=target_info.get("native_intervention_edit_warning", "Do not change the index numbers, only the translation text."),
         native_intervention_max_words_warning=target_info.get("native_intervention_max_words_warning", "Try to ensure no more than {max_words} words per line."),
-        native_intervention_error_label=target_info.get("native_intervention_error_label", "The errors identified in these lines are:")
+        native_intervention_error_label=target_info.get("native_intervention_error_label", "The errors identified in these lines are:"),
+        native_do_not_translate_label=target_info.get("native_do_not_translate_label", "DO NOT TRANSLATE"),
+        native_overlong_word=target_info.get("native_overlong_word", "words"),
+        native_overlong_phrase=target_info.get("native_overlong_phrase", "too long"),
+        native_newline_regex=target_info.get("native_newline_regex", r'\s*\\+[n]\s*')
     )
 
 def load_custom_profile(data: dict) -> LanguageProfile:
