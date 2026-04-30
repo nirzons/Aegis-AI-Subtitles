@@ -10,7 +10,7 @@ STEP_HEADER_EN = """
 ### [IDX_WORKFLOW]. Structured Workflow (Mandatory - Do Not Skip) ###
 To ensure accurate and natural translation, you must follow these steps in exact order:
 
-In the thought_process field, write your "thought process, strategy, and dilemmas before the final translation." (Important: Do not copy this sentence! Write your actual thoughts).
+In the thought_process field, write your "thought process, strategy, and dilemmas before the final translation." (Keep it concise: 2-3 sentences max).
 In the summary field, write a "short summary of what is happening in the plot right now." (Important: Do not copy this sentence! Write an actual summary).
 In the translated_srt field, enter the final translations.
 In the last_speaker_info field, write the "name of the last speaker (M/F) speaking to target (M/F/Unknown/Camera)." (Do not copy the instruction).
@@ -182,7 +182,7 @@ def get_tag_rule(profile: LanguageProfile) -> str:
 
 JSON_SCHEMA_TEMPLATE = """
 {
-  "thought_process": "<insert your thought process here>",
+  "thought_process": "<thought process, 2-3 sentences max>",
   "summary": "<brief summary of what is happening in the plot right now>",
   "continuous_translation_draft": "<insert the entire translation as a single continuous text paragraph>",
   "mapping_plan": "<insert the mapping plan against the index distribution here. e.g.: 'sentence 1 to 14'>",
@@ -197,7 +197,7 @@ JSON_SCHEMA_TEMPLATE = """
 
 JSON_SCHEMA_LITE = """
 {
-  "thought_process": "...",
+  "thought_process": "<thought process, 2-3 sentences max>",
   "summary": "<brief summary of what is happening in the plot right now>",
   "translated_srt": {
     "1": "<the final {target_lang} translation for index 1 relevant to the batch>",

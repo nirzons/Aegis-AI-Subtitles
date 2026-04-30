@@ -486,24 +486,24 @@ def pre_audit_source(eng_dict, illegal_labels=None, profile=None):
         speaker_match = RE_SPEAKER_NAME.search(txt)
         if speaker_match:
             found_name = speaker_match.group(1).strip()
-            msg = get_msg("pre_speaker_name", "Suspected speaker name ('{found_name}:'). Delete the name, but make sure the dialogue itself is still translated!", found_name=found_name)
+            msg = get_msg("pre_speaker_name", "Speaker name ('{found_name}:') - Delete name, keep dialogue.", found_name=found_name)
             warnings.append((idx, msg))
             
         # 2. Look for SDH tags in brackets (e.g., [music], (coughs))
         sdh_match = RE_SDH_BRACKETS.search(txt)
         if sdh_match:
             content = sdh_match.group(0)
-            msg = get_msg("pre_sdh_brackets", "Suspected sound description/SDH ({content}). If it's a sound description, delete it but translate any other dialogue appearing in the line.", content=content)
+            msg = get_msg("pre_sdh_brackets", "SDH ({content}) - Delete sound, keep dialogue.", content=content)
             warnings.append((idx, msg))
 
         # 3. Look for Source Tag Mismatches (Extreme technical hardening)
         if txt.count('<') != txt.count('>') or txt.count('<i>') != txt.count('</i>'):
-            msg = get_msg("pre_tag_mismatch", "Tag mismatch detected in the English source. This could cause translation errors or Judge rejections. It is recommended to fix the source file.")
+            msg = get_msg("pre_tag_mismatch", "Tag mismatch in source - Fix or ensure validity.")
             warnings.append((idx, msg))
 
         # 4. Look for Music symbols
         if "♪" in txt:
-            msg = get_msg("pre_music_symbol", "Music symbol ♪ found. Delete it from the translation.")
+            msg = get_msg("pre_music_symbol", "Music symbol ♪ - Delete from translation.")
             warnings.append((idx, msg))
             
     return warnings

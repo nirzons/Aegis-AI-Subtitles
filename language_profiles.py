@@ -184,7 +184,7 @@ BUILT_IN_PROFILES = {
         "label_translation_blocks": "בלוקים לתרגום - JSON",
         "label_next_context": "הקשר הבא",
         "native_json_schema": """{
-  "thought_process": "<הכנס כאן את תהליך המחשבה שלך>",
+  "thought_process": "<תהליך מחשבה, מקסימום 2-3 משפטים>",
   "summary": "<תקציר קצר של המתרחש בעלילה כרגע>",
   "continuous_translation_draft": "<הכנס כאן את כל התרגום כפסקת טקסט רציפה אחת>",
   "mapping_plan": "<הכנס כאן את תוכנית המיפוי מול חלוקת האינדקסים. לדוגמה: 'משפט 1 ל-14'>",
@@ -196,7 +196,7 @@ BUILT_IN_PROFILES = {
   "continuity_note": "<הוראת רצף לבאץ' הבא, השאר ריק אם אין>"
 }""",
         "native_json_schema_lite": """{
-  "thought_process": "...",
+  "thought_process": "<תהליך מחשבה, מקסימום 2-3 משפטים>",
   "summary": "<תקציר קצר של המתרחש בעלילה כרגע>",
   "translated_srt": {
     "1": "<התרגום הסופי לעברית של אינדקס 1 הרלוונטי לבאץ'>",
@@ -206,10 +206,10 @@ BUILT_IN_PROFILES = {
   "continuity_note": "<הוראת רצף לבאץ' הבא, השאר ריק אם אין>"
 }""",
         "native_audit_messages": {
-            "pre_speaker_name": "חשד לשם דובר ('{found_name}:'). מחק את השם, אך וודא שהדיאלוג המדובר עדיין מתורגם!",
-            "pre_sdh_brackets": "חשד לתיאור צליל/SDH ({content}). אם מדובר בתיאור סאונד, מחק אותו אך תרגם כל דיאלוג אחר המופיע בשורה.",
-            "pre_tag_mismatch": "זוהה חוסר התאמה בתגיות במקור האנגלי. זה עלול לגרום לשגיאות תרגום או פסילה ע\"י השופט. מומלץ לתקן את קובץ המקור.",
-            "pre_music_symbol": "נמצא סמל מוזיקה ♪. מחק אותו מהתרגום.",
+            "pre_speaker_name": "שם דובר ('{found_name}:') - מחק שם, השאר דיאלוג.",
+            "pre_sdh_brackets": "תיאור צליל/SDH ({content}) - מחק צליל, השאר דיאלוג.",
+            "pre_tag_mismatch": "חוסר התאמת תגיות במקור - תקן או וודא תקינות.",
+            "pre_music_symbol": "סמל ♪ - מחק מהתרגום.",
             "heur_verbosification": "IDX:{idx}|זוהתה חריגה משמעותית באורך התרגום (Verbosification) ביחס למקור ({block_ratio:.1f}x).",
             "heur_high_expansion": "IDX:{idx}|התרגום ארוך יחסית למקור (High expansion) ({block_ratio:.1f}x).",
             "heur_extreme_omission": "IDX:{idx}|חשד להשמטת טקסט - התרגום קצר משמעותית מהמקור ({block_ratio:.1f}x). ודא שלא הושמט מידע עלילתי. זכור: עברית מטבעה דחוסה יותר מאנגלית (מילות יחס כמו in/to/that הופכות לקידומות ב/ל/ש) לכן יחס נמוך הוא לרוב תקין לחלוטין.",
@@ -232,7 +232,7 @@ BUILT_IN_PROFILES = {
         "native_missing_translation_label": "תרגום חסר",
         "native_tag_rule": "4. תגיות עיצוב (Formatting Tags): שמור על תגיות כמו <i> או <font color=\"...\"> בדיוק במיקומן המקורי. אל תתרגם מילים טכניות (כמו 'color') ואל תמחק אותן. **חשוב: מותר (ואף חובה) להוסיף ירידת שורה `\\n` בתוך תגיות (למשל `<i>טקסט...\\n...טקסט</i>`) כדי לשמור על חוק {max_words} המילים לשורה.** וודא שערכי צבע מוקפים במירכאות.",
         "native_workflow_steps": {
-            "header": "### [IDX_WORKFLOW]. תהליך עבודה מובנה (חובה - אין לדלג) ###\nכדי להבטיח תרגום מדויק וטבעי, עליך לעבוד בשלבים הבאים בדיוק לפי הסדר:\n\nבשדה thought_process כתוב את \"תהליך המחשבה, האסטרטגיה וההתלבטויות לפני התרגום הסופי.\" (חשוב: אל תעתיק את משפט זה כפי שהוא! כתוב את מחשבותיך האמיתיות).\nבשדה summary כתוב את \"תקציר קצר של המתרחש בעלילה כרגע.\" (חשוב: אל תעתיק את משפט זה כפי שהוא! כתוב תקציר אמיתי).\nבשדה translated_srt הזן את התרגומים הסופיים.\nבשדה last_speaker_info כתוב את \"שם הדובר האחרון (M/F) פונה אל יעד (M/F/לא ידוע/מצלמה).\" (אל תעתיק את ההוראה).\nבשדה continuity_note כתוב את \"הוראת רצף לבאץ' הבא (השאר ריק אם אין).\" (אל תעתיק את ההוראה).",
+            "header": "### [IDX_WORKFLOW]. תהליך עבודה מובנה (חובה - אין לדלג) ###\nכדי להבטיח תרגום מדויק וטבעי, עליך לעבוד בשלבים הבאים בדיוק לפי הסדר:\n\nבשדה thought_process כתוב את \"תהליך המחשבה, האסטרטגיה וההתלבטויות לפני התרגום הסופי.\" (שמור על תמציתיות: מקסימום 2-3 משפטים).\nבשדה summary כתוב את \"תקציר קצר של המתרחש בעלילה כרגע.\" (חשוב: אל תעתיק את משפט זה כפי שהוא! כתוב תקציר אמיתי).\nבשדה translated_srt הזן את התרגומים הסופיים.\nבשדה last_speaker_info כתוב את \"שם הדובר האחרון (M/F) פונה אל יעד (M/F/לא ידוע/מצלמה).\" (אל תעתיק את ההוראה).\nבשדה continuity_note כתוב את \"הוראת רצף לבאץ' הבא (השאר ריק אם אין).\" (אל תעתיק את ההוראה).",
             "read_context": "שלב {n}: קרא את טקסט \"הקשר קודם\" ואת \"הקשר הבא\" כדי להבין את הסיטואציה. שים לב: הטקסטים הללו מוגשים כעת כטקסט נקי ללא אינדקסים או זמנים (Striped Context). **אל תתרגם אותם**.",
             "priming": "שלב {n}: כתוב תקציר קצר של המתרחש בעלילה כרגע בתוך שדה ה-summary. זה יעזור לך 'להיכנס לעניינים' לפני שאתה מתחיל לתרגם.",
             "draft": "שלב {n}: קרא את מילון ה-JSON המופיע תחת הכותרת [Translation Blocks - JSON]. זהו המידע היחיד שעליך לתרגם. תרגם את כל הטקסטים המופיעים במילון כפסקה אחת רציפה, טבעית וזורמת לעברית. כתוב תרגום זה בתוך שדה \"continuous_translation_draft\" ב-JSON. בשלב זה, אל תתייחס לאינדקסים. חל איסור מוחלט לכלול בטיוטה מידע המופיע בבלוקי ההקשר.",
@@ -335,7 +335,7 @@ BUILT_IN_PROFILES = {
         "opening_summary": "L'épisode vient de commencer.",
         "label_prev_context": "Contexte Précédent",
         "native_workflow_steps": {
-            "header": "### [IDX_WORKFLOW]. Processus de Travail Structuré (Obligatoire - Ne pas ignorer) ###\nPour garantir une traduction précise et naturelle, vous devez suivre ces étapes dans l'ordre exact :\n\nDans le champ thought_process, écrivez votre \"processus de réflexion, stratégie et dilemmes avant la traduction finale.\" (Important : Ne copiez pas cette phrase ! Écrivez vos vraies pensées).\nDans le champ summary, écrivez un \"court résumé de ce qui se passe dans l'intrigue en ce moment.\" (Important : Ne copiez pas cette phrase ! Écrivez un vrai résumé).\nDans le champ translated_srt, saisissez les traductions finales.\nDans le champ last_speaker_info, écrivez le \"nom du dernier locuteur (M/F) s'adressant à la cible (M/F/Inconnu/Caméra).\" (Ne copiez pas l'instruction).\nDans le champ continuity_note, écrivez la \"note de continuité pour le prochain lot (laisser vide si aucune).\" (Ne copiez pas l'instruction).",
+            "header": "### [IDX_WORKFLOW]. Processus de Travail Structuré (Obligatoire - Ne pas ignorer) ###\nPour garantir une traduction précise et naturelle, vous devez suivre ces étapes dans l'ordre exact :\n\nDans le champ thought_process, écrivez votre \"processus de réflexion, stratégie et dilemmes avant la traduction finale.\" (Restez concis : 2-3 phrases max).\nDans le champ summary, écrivez un \"court résumé de ce qui se passe dans l'intrigue en ce moment.\" (Important : Ne copiez pas cette phrase ! Écrivez un vrai résumé).\nDans le champ translated_srt, saisissez les traductions finales.\nDans le champ last_speaker_info, écrivez le \"nom du dernier locuteur (M/F) s'adressant à la cible (M/F/Inconnu/Caméra).\" (Ne copiez pas l'instruction).\nDans le champ continuity_note, écrivez la \"note de continuité pour le prochain lot (laisser vide si aucune).\" (Ne copiez pas l'instruction).",
             "read_context": "Étape {n} : Lisez les textes \"Contexte Précédent\" et \"Contexte Suivant\" pour comprendre la situation. Note : Ces textes sont fournis en texte brut sans index ni horodatage (Striped Context). **Ne les traduisez pas**.",
             "priming": "Étape {n} : Écrivez un court résumé de ce qui se passe dans l'intrigue en ce moment dans le champ summary. Cela vous aidera à vous mettre en contexte avant de commencer à traduire.",
             "draft": "Étape {n} : Lisez le dictionnaire JSON sous l'en-tête [Translation Blocks - JSON]. C'est la SEULE information que vous devez traduire. Traduisez tous les textes apparaissant dans le dictionnaire comme un seul paragraphe continu, naturel et fluide en Français. Écrivez cette traduction dans le champ JSON \"continuous_translation_draft\". À ce stade, ignorez les index. Il vous est strictement interdit d'inclure des informations provenant des blocs de contexte dans le brouillon.",
