@@ -29,6 +29,10 @@ from utils.app_utils import log, file_log, format_cost_display, get_eta_string, 
 from utils.srt_manager import strip_srt, load_srt_index_to_text, load_srt_full_history, validate_srt_file
 
 from core.translation_stats import _inc_by_size, make_stats, print_stats
+from core.session_manager import (
+    get_next_checkpoint_file, resolve_checkpoint_paths, save_checkpoint,
+    cleanup_checkpoint, build_checkpoint_payload, restore_profile_from_checkpoint
+)
 
 
 class TranslationEngine:
@@ -182,13 +186,8 @@ class TranslationEngine:
 
             if resume_mode:
                 checkpoint_data = config["checkpoint_data"]
+                sys_file, srt_file = resolve_checkpoint_paths(checkpoint_data, sysprm_dir, english_subs_dir)
                 
-                # Ensure we have full absolute paths even if checkpoint only has basenames
-                sys_file_raw = checkpoint_data['sys_file']
-                srt_file_raw = checkpoint_data['srt_file']
-                sys_file = sys_file_raw if os.path.isabs(sys_file_raw) else os.path.join(sysprm_dir, sys_file_raw)
-                srt_file = srt_file_raw if os.path.isabs(srt_file_raw) else os.path.join(english_subs_dir, srt_file_raw)
-
                 output_file = checkpoint_data['output_file']
                 current_index = checkpoint_data['current_index']
                 processed = checkpoint_data.get('processed', 0)
@@ -196,16 +195,8 @@ class TranslationEngine:
                 total_judge_cost = checkpoint_data.get('total_judge_cost', 0.0)
                 context_state = checkpoint_data['context_state']
                 
-                # Restore Language Metadata from Checkpoint if available
-                if "source_lang_code" in checkpoint_data:
-                    profile.source_lang_code = checkpoint_data["source_lang_code"]
-                if "target_lang_code" in checkpoint_data:
-                    profile.target_lang_code = checkpoint_data["target_lang_code"]
-                if "use_native_instructions" in checkpoint_data:
-                    profile.use_native_instructions = bool(checkpoint_data["use_native_instructions"])
-                if "max_words_per_line" in checkpoint_data:
-                    profile.max_words_per_line = int(checkpoint_data["max_words_per_line"])
-                current_checkpoint_file = config["checkpoint_file_path"] # The actual path to the .json file
+                restore_profile_from_checkpoint(profile, checkpoint_data)
+                current_checkpoint_file = config["checkpoint_file_path"]
                 
                 if not os.path.exists(srt_file) or not os.path.exists(sys_file):
                     log(self.log_queue, session_log_file, "❌ Error: Original files missing. Cannot resume.")
@@ -219,18 +210,7 @@ class TranslationEngine:
             else:
                 sys_file = os.path.join(sysprm_dir, config["sys_name"])
                 srt_file = os.path.join(english_subs_dir, config["srt_name"])
-
-                max_num = 0
-                while True:
-                    max_num += 1
-                    current_checkpoint_file = os.path.join(checkpoint_dir, f"translator_checkpoint_{max_num}.json")
-                    if not os.path.exists(current_checkpoint_file):
-                        try:
-                            with open(current_checkpoint_file, 'w', encoding='utf-8') as f:
-                                json.dump({"pid": os.getpid(), "processed": 0, "status": "initializing"}, f)
-                            break
-                        except Exception:
-                            continue
+                current_checkpoint_file = get_next_checkpoint_file(checkpoint_dir)
 
                 base_name = os.path.basename(srt_file)
                 output_file = os.path.join(output_dir, base_name.replace('.srt', f'_{model_cfg["name"]}_{profile.target_lang_code}.srt'))
@@ -1347,30 +1327,11 @@ class TranslationEngine:
 
                         # ── Update accumulated elapsed time & write checkpoint ─
                         stats["total_elapsed_seconds"] = elapsed_at_session_start + (time.time() - session_start_time)
-                        checkpoint_data = {
-                            "pid": os.getpid(),
-                            "model_choice": config["model_choice"],
-                            "judge_model_choice": config["judge_model_choice"],
-                            "batch_size": batch_size,
-                            "effective_batch_size": effective_batch_size,
-                            "judge_batch_size": config["judge_batch_size"],
-                            "sys_file": config["sys_name"],
-                            "srt_file": config["srt_name"],
-                            "output_file": output_file,
-                            "current_index": current_index,
-                            "processed": processed,
-                            "total_blocks": total_blocks,
-                            "total_main_cost": total_main_cost,
-                            "total_judge_cost": total_judge_cost,
-                            "context_state": context_state,
-                            "source_lang_code": profile.source_lang_code,
-                            "target_lang_code": profile.target_lang_code,
-                            "use_native_instructions": profile.use_native_instructions,
-                            "max_words_per_line": profile.max_words_per_line,
-                            "stats": stats,
-                        }
-                        with open(current_checkpoint_file, 'w', encoding='utf-8') as ckpt_f:
-                            json.dump(checkpoint_data, ckpt_f, ensure_ascii=False, indent=4)
+                        checkpoint_data = build_checkpoint_payload(
+                            config, current_index, processed, total_blocks, total_main_cost, total_judge_cost, 
+                            context_state, profile, stats, output_file
+                        )
+                        save_checkpoint(current_checkpoint_file, checkpoint_data)
                     
                     total_elapsed = stats.get("total_elapsed_seconds", 0.0)
                     time_str, finish_str, eta_secs = get_eta_string(total_elapsed, processed, total_blocks)
@@ -1404,8 +1365,7 @@ class TranslationEngine:
                 )
                 # ─────────────────────────────────────────────────────────
 
-                if current_checkpoint_file and os.path.exists(current_checkpoint_file):
-                    os.remove(current_checkpoint_file)
+                if cleanup_checkpoint(current_checkpoint_file):
                     log(self.log_queue, session_log_file, f"🧹 Cleaned up checkpoint.")
 
                 # ── Bypass end-of-session warning ─────────────────────────────
