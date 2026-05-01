@@ -263,3 +263,473 @@ class UIController:
         self.app.ui.widgets.judge_model_combo['values'] = model_list
         self.on_model_change()
 
+    def _reset_ui_for_new_session(self):
+        self.app.ui.widgets.progress_var.set(0)
+        self.app.ui.widgets.lbl_progress.config(text="Progress: 0/0 (0%)")
+        self.app.ui.widgets.lbl_eta.config(text="ETA: --:--")
+        self.app.ui.widgets.lbl_cost.config(text="Cost: $0.00")
+        self.app.ui.widgets.btn_open_translated.config(state=tk.DISABLED)
+        self.app.ui.widgets.btn_start.config(text="Start Translation")
+        self.app.ui.widgets.srt_combo.config(state="readonly")
+        self.app.ui.widgets.sysprm_combo.unbind("<<ComboboxSelected>>")
+        
+        # Reset Web GUI
+        if self.app.ui.widgets.web_gui_var.get():
+            self.app.shared_state.update_progress(0, 0)
+            self.app.shared_state.update_eta("--:--", "--:--")
+            self.app.shared_state.update_cost(0.0, 0.0, display_text="Cost: $0.00")
+
+    def _update_ui_from_checkpoint(self, ckpt):
+        from utils.app_utils import format_cost_display, get_eta_string
+        processed, total = ckpt.get("processed", 0), ckpt.get("total_blocks", 0)
+        pct = (processed / total * 100) if total else 0
+        self.app.ui.widgets.progress_var.set(pct)
+        self.app.ui.widgets.lbl_progress.config(text=f"Progress: {processed}/{total} ({pct:.1f}%)")
+        self.app.ui.widgets.lbl_cost.config(text=format_cost_display(ckpt.get("total_main_cost", 0.0), ckpt.get("total_judge_cost", 0.0)))
+
+        # ── Persistent Performance & ETA ──
+        stats = ckpt.get("stats", {})
+        self.app.perf_history_new = list(stats.get("llm_call_times_new", []))
+        self.app.perf_history_retry = list(stats.get("llm_call_times_retry", []))
+        
+        # Calculate and show immediate ETA from checkpoint stats
+        elapsed = stats.get("total_elapsed_seconds", 0.0)
+        time_str, finish_str, eta_secs = get_eta_string(elapsed, processed, total)
+        
+        self.app.total_eta_seconds = eta_secs
+        self.app.last_finish_time_str = finish_str
+
+        if processed > 0:
+            self.app.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
+        else:
+            self.app.ui.widgets.lbl_eta.config(text="ETA: --:--")
+
+        # Sync with Web Dashboard
+        if self.app.ui.widgets.web_gui_var.get():
+            self.app.shared_state.update_progress(processed, total)
+            self.app.shared_state.update_eta(time_str if processed > 0 else "--:--", finish_str if processed > 0 else "--:--")
+            self.app.shared_state.update_cost(ckpt.get("total_main_cost", 0.0), ckpt.get("total_judge_cost", 0.0), 
+                                          display_text=self.app.ui.widgets.lbl_cost.cget("text"))
+        # ──────────────────────────────────
+        
+        # ── Language & Profile Restoration ──
+        if "source_lang_code" in ckpt:
+            self.app.ui.widgets.source_lang_var.set(ckpt["source_lang_code"])
+        if "target_lang_code" in ckpt:
+            self.app.ui.widgets.target_lang_var.set(ckpt["target_lang_code"])
+        
+        # Trigger directory/profile sync (calls refresh_files)
+        self.on_language_change()
+        
+        self.app.ui.widgets.srt_var.set(ckpt.get("srt_file", ""))
+        self.app.ui.widgets.sysprm_var.set(ckpt.get("sys_file", ""))
+        self.app.ui.widgets.batch_size_var.set(str(ckpt.get("batch_size", "30")))
+        self.app.ui.widgets.judge_batch_var.set(str(ckpt.get("judge_batch_size", "20")))
+        
+        # Select matching model strings in Comboboxes
+        for var, key in [(self.app.ui.widgets.model_var, "model_choice"), (self.app.ui.widgets.judge_model_var, "judge_model_choice")]:
+            target_idx = str(ckpt.get(key, "1"))
+            for val in self.app.ui.widgets.model_combo['values']:
+                if val.startswith(f"{target_idx} - "):
+                    var.set(val)
+                    break
+
+        self.app.ui.widgets.btn_start.config(text="Resume Translation")
+        self.app.ui.widgets.srt_combo.config(state="disabled")
+        self.app.ui.widgets.btn_open_translated.config(state=tk.NORMAL if ckpt.get("output_file") else tk.DISABLED)
+
+    def _update_web_port_label(self):
+        """Called ~300ms after the web server thread starts to display the actual bound port."""
+        port = self.app.shared_state.web_port
+        if port:
+            log(self.app.log_queue, self.app.session_log_file, f"🌐 Web Dashboard ready → http://localhost:{port}")
+            self.app.ui.widgets.lbl_web_clients.config(text=f"(:{port})")
+        else:
+            # Server hasn't bound yet — retry once more after another 500ms
+            self.app.root.after(500, self._update_web_port_label)
+
+    def start_translation(self):
+        import re
+        import datetime
+        import json
+        import threading
+        from core.llm_api import ping_model
+
+        if self.app.is_running: return
+        
+        resume_val = self.app.ui.widgets.resume_var.get()
+        choice_idx = int(re.search(r'\[(\d+)\]', resume_val).group(1)) if resume_val else 0
+        resume_mode = choice_idx > 0
+        
+        # Config gathering
+        model_idx = self.app.ui.widgets.model_var.get().split(" - ")[0]
+        judge_idx = self.app.ui.widgets.judge_model_var.get().split(" - ")[0]
+        model_cfg = SETTINGS.config["models"].get(model_idx).copy()
+        judge_cfg = (SETTINGS.config["models"].get(judge_idx) or model_cfg).copy()
+        
+        # Inject API keys into configs for the ping test
+        api_key = SETTINGS.config["api_keys"].get(model_cfg['provider'])
+        judge_api_key = SETTINGS.config["api_keys"].get(judge_cfg['provider'])
+        model_cfg['api_key'] = api_key
+        judge_cfg['api_key'] = judge_api_key
+
+        # 1. Basic Key Presence Validation
+        if not api_key:
+            messagebox.showerror("Key Missing", f"API Key for '{model_cfg['provider'].upper()}' is missing.\n\nPlease click the ⚙️ Settings button to enter your key.")
+            return
+        if not judge_api_key:
+            messagebox.showerror("Key Missing", f"API Key for Judge Provider '{judge_cfg['provider'].upper()}' is missing.\n\nPlease click the ⚙️ Settings button to enter your key.")
+            return
+
+        # --- Pre-Flight Connectivity Checks ---
+        log(self.app.log_queue, getattr(self.app, 'session_log_file', None), f"🔌 Testing connectivity for {model_cfg.get('name', 'Main Model')}...")
+        ok, msg = ping_model(model_cfg)
+        if not ok:
+            messagebox.showerror("Connectivity Error (Main Model)", msg, parent=self.app.root)
+            log(self.app.log_queue, getattr(self.app, 'session_log_file', None), f"❌ Pre-flight check FAILED: {msg}")
+            return
+            
+        # 2. Judge Model Ping (if different)
+        if judge_idx != model_idx:
+            log(self.app.log_queue, getattr(self.app, 'session_log_file', None), f"🔌 Testing connectivity for Judge ({judge_cfg.get('name', 'Judge')})...")
+            ok, msg = ping_model(judge_cfg)
+            if not ok:
+                messagebox.showerror("Connectivity Error (Judge Model)", msg, parent=self.app.root)
+                log(self.app.log_queue, getattr(self.app, 'session_log_file', None), f"❌ Pre-flight check (Judge) FAILED: {msg}")
+                return
+        
+        log(self.app.log_queue, getattr(self.app, 'session_log_file', None), "✅ All models reached successfully. Initializing engine...")
+        # --------------------------------------
+
+        # 2. File Selection Validation
+
+        srt_name = self.app.ui.widgets.srt_var.get()
+        sys_name = self.app.ui.widgets.sysprm_var.get()
+        if not resume_mode and (not srt_name or not sys_name):
+            messagebox.showerror("Error", "Please select both an SRT file and a System Prompt for a new session.")
+            return
+
+        # --- Sysprm Language Sanity Check ---
+        sys_path = os.path.join(self.app.sysprm_dir, sys_name)
+        if os.path.exists(sys_path):
+            try:
+                with open(sys_path, 'r', encoding='utf-8-sig') as f:
+                    sys_content = f.read()
+                
+                from utils.app_utils import detect_sysprm_language
+                detected_lang_type = detect_sysprm_language(sys_content) # "English" or "Native"
+                
+                profile = SETTINGS.get_active_profile()
+                try:
+                    sysprm_json = json.loads(sys_content.lstrip('\ufeff'))
+                    use_native = bool(sysprm_json.get("language", {}).get("use_native_instructions", False))
+                except Exception:
+                    use_native = (detected_lang_type == "Native")
+                
+                sys_name_lower = sys_name.lower()
+                source_lang_name = profile.source_lang.lower()
+                target_lang_name = profile.target_lang.lower()
+                
+                lang_variants = {
+                    "hebrew": ["hebrew", "heb", "he", "עברית"],
+                    "french": ["french", "fra", "fre", "fr", "צרפתית"],
+                    "spanish": ["spanish", "esp", "es", "ספרדית"],
+                    "english": ["english", "eng", "en", "אנגלית"],
+                    "chinese": ["chinese", "zh", "chi", "סינית"],
+                    "portuguese": ["portuguese", "port", "pt", "פורטוגזית"],
+                    "russian": ["russian", "ru", "rus", "רוסית"],
+                    "italian": ["italian", "it", "ita", "איטלקית"],
+                    "polish": ["polish", "pl", "pol", "פולנית"],
+                    "ukrainian": ["ukrainian", "uk", "ukr", "אוקראינית"]
+                }
+                
+                # Check for "<source>_2_<target>" pattern
+                mismatch = False
+                mismatch_reason = ""
+                
+                # 2. Filename Source/Target check
+                if not mismatch and "_2_" in sys_name_lower:
+                    try:
+                        parts = sys_name_lower.split('_')
+                        if "2" in parts:
+                            idx = parts.index("2")
+                            file_source = parts[idx-1]
+                            file_target = parts[idx+1]
+                            
+                            source_expected = lang_variants.get(source_lang_name, [source_lang_name])
+                            target_expected = lang_variants.get(target_lang_name, [target_lang_name])
+                            
+                            if not any(k in file_source or file_source in k for k in source_expected):
+                                mismatch_reason = f"Source language mismatch: Selected {profile.source_lang} but SysPrm says '{file_source}'."
+                                mismatch = True
+                            elif not any(k in file_target or file_target in k for k in target_expected):
+                                mismatch_reason = f"Target language mismatch: Selected {profile.target_lang} but SysPrm says '{file_target}'."
+                                mismatch = True
+                    except Exception: pass
+                
+                # 3. Fallback Keyword check
+                if not mismatch:
+                    target_expected = lang_variants.get(target_lang_name, [target_lang_name])
+                    has_target_keyword = any(k in sys_name_lower for k in target_expected)
+                    
+                    if not has_target_keyword and ("_ni" in sys_name_lower or detected_lang_type == "Native"):
+                        mismatch_reason = f"The selected SysPrm '{sys_name}' does not appear to be for {profile.target_lang}."
+                        mismatch = True
+                    
+                if mismatch:
+                    mismatch_msg = f"⚠️ Language Mismatch Warning:\n\n{mismatch_reason}\n\nThis will likely cause the AI to output the wrong language or hallucinate. Would you like to proceed anyway?"
+                    ans = messagebox.askyesno("Language Mismatch Warning", mismatch_msg, parent=self.app.root)
+                    if not ans:
+                        log(self.app.log_queue, self.app.session_log_file, "🛑 Session aborted by user due to language mismatch.")
+                        return
+                
+                log(self.app.log_queue, self.app.session_log_file, f"🔍 SysPrm Analysis: Detected {detected_lang_type} formatting.")
+            except Exception as e:
+                log(self.app.log_queue, self.app.session_log_file, f"⚠️ SysPrm sanity check failed: {e}")
+
+        config = {
+            "resume_mode": resume_mode,
+            "debug_mode": self.app.ui.widgets.debug_var.get(),
+            "model_cfg": model_cfg,
+            "model_choice": model_idx,
+            "api_key": api_key,
+            "batch_size": int(self.app.ui.widgets.batch_size_var.get() or 30),
+            "session_log_file": self.app.session_log_file,
+            "srt_name": self.app.ui.widgets.srt_var.get(),
+            "sys_name": self.app.ui.widgets.sysprm_var.get(),
+            "judge_cfg": judge_cfg,
+            "judge_api_key": SETTINGS.config["api_keys"].get(judge_cfg['provider']),
+            "judge_model_choice": judge_idx,
+            "judge_batch_size": self.app.ui.widgets.judge_batch_var.get(),
+            "checkpoint_dir": self.app.checkpoint_dir,
+            "sysprm_dir": self.app.sysprm_dir,
+            "english_subs_dir": self.app.english_subs_dir,
+            "output_dir": self.app.output_dir,
+            "scratch_dir": os.path.join(self.app.curr_dir, "scratch"),
+            "bypass_intervention": self.app.ui.widgets.bypass_intervention_var.get(),
+            "logs_dir": self.app.logs_dir,
+            "language_profile": SETTINGS.get_active_profile()
+        }
+
+        if resume_mode:
+            ckpt = self.app.available_checkpoints[choice_idx - 1]
+            config.update({"checkpoint_data": ckpt, "checkpoint_file_path": ckpt["file_path"]})
+
+        # Launch Engine
+        self.app.is_running = True
+        self.app.engine.should_stop = False
+        self.app.engine.bypass_intervention = self.app.ui.widgets.bypass_intervention_var.get()
+        self._toggle_ui_state(tk.DISABLED)
+        
+        # In Hot Resume mode, don't wipe the terminal. Add a separator instead.
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        if resume_mode:
+            log(self.app.log_queue, self.app.session_log_file, f"\n{'='*30}\n🔄 [{timestamp}] SESSION RESUMED\n{'='*30}\n")
+        else:
+            self.app.ui.widgets.log_text.delete(1.0, tk.END)
+            log(self.app.log_queue, self.app.session_log_file, f"🚀 [{timestamp}] NEW SESSION STARTED")
+        
+        self.app.shared_state.set_running(True)
+        threading.Thread(target=self.app.engine.run_translation, args=(config,), daemon=True).start()
+
+    def stop_translation(self):
+        if self.app.is_running:
+            self.app.engine.request_stop()
+            log(self.app.log_queue, self.app.session_log_file, "🛑 Stop signal received. Finishing current batch...")
+            self.app.ui.widgets.btn_stop.config(state=tk.DISABLED)
+
+    def process_queues(self):
+        while not self.app.log_queue.empty():
+            text = self.app.log_queue.get()
+            self.app._log_with_tags(text)
+            if self.app.ui.widgets.web_gui_var.get():
+                self.app.shared_state.append_log(text)
+            
+        while not self.app.ui_queue.empty():
+            type, data = self.app.ui_queue.get()
+            if type == "progress":
+                p, t = data
+                self.app.ui.widgets.progress_var.set((p/t*100) if t else 0)
+                self.app.ui.widgets.lbl_progress.config(text=f"Progress: {p}/{t} ({(p/t*100) if t else 0:.1f}%)")
+            elif type == "eta":
+                time_str, finish_str, eta_secs = data
+                self.app.total_eta_seconds = eta_secs
+                self.app.last_finish_time_str = finish_str
+                self.app.ui.widgets.lbl_eta.config(text=f"ETA: {time_str} | End: {finish_str}")
+            elif type == "timer_start":
+                # data is expected to be a dict
+                if isinstance(data, dict):
+                    self.app.last_batch_size = data.get("size", 1)
+                    self.app.last_batch_load = data.get("load", 1)
+                    self.app.current_is_retry = data.get("is_retry", False)
+                else:
+                    self.app.last_batch_size = data[0] if isinstance(data, tuple) else data
+                    self.app.last_batch_load = self.app.last_batch_size * 50
+                    self.app.current_is_retry = False
+
+                # Safety: Cancel any existing timer loop before starting a new one
+                if hasattr(self.app, '_timer_after_id') and self.app._timer_after_id:
+                    self.app.root.after_cancel(self.app._timer_after_id)
+                    self.app._timer_after_id = None
+
+                self.app.resp_timer_seconds = 0
+                self.app.active_phase = "main"
+
+                # Batch Size Change detection
+                arrow = ""
+                if self.app.num_batches_processed > 0 and self.app.previous_batch_size > 0:
+                    if self.app.last_batch_size > self.app.previous_batch_size: arrow = " 🔼"
+                    elif self.app.last_batch_size < self.app.previous_batch_size: arrow = " 🔽"
+                
+                self.app.ui.widgets.lbl_status.config(text=f"📦 Size: {self.app.last_batch_size}{arrow}")
+
+                # Update Web Dashboard
+                if self.app.ui.widgets.web_gui_var.get():
+                    if self.app.current_is_retry:
+                        self.app.shared_state.update_status("Translating (Retry)", "#f59e0b")
+                    else:
+                        self.app.shared_state.update_status("Translating", "#0ea5e9")
+
+                # Choose history based on retry status
+                history = self.app.perf_history_new
+                if self.app.current_is_retry:
+                    if len(self.app.perf_history_retry) >= 2 or (len(self.app.perf_history_retry) == 1 and len(self.app.perf_history_new) == 0):
+                        history = self.app.perf_history_retry
+                    else:
+                        history = self.app.perf_history_new
+
+                # Calculate estimation
+                self.app.est_remaining = self.app._calculate_estimation(history, self.app.last_batch_size, self.app.last_batch_load, min_val=5)
+                
+                est_str = f" / 📦 Est: {self.app._fmt_seconds(self.app.est_remaining)}" if self.app.est_remaining > 0 else ""
+                tag = "🔄 RETRY " if self.app.current_is_retry else ""
+                self.app.ui.widgets.lbl_timer.config(text=f"⏱️ {tag}{self.app._fmt_seconds(self.app.resp_timer_seconds)}{est_str}")
+                self.app._tick_timer()
+            elif type == "timer_stop":
+                load = data if isinstance(data, (int, float)) else getattr(self.app, 'last_batch_load', self.app.last_batch_size * 50)
+                if self.app.resp_timer_seconds > 0:
+                    if getattr(self.app, 'current_is_retry', False):
+                        self.app.perf_history_retry.append((self.app.resp_timer_seconds, load))
+                    else:
+                        self.app.perf_history_new.append((self.app.resp_timer_seconds, load))
+                    
+                    self.app.num_batches_processed += 1
+
+                self.app.resp_timer_seconds = -1
+                self.app.active_phase = None
+                self.app.ui.widgets.lbl_timer.config(text="")
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.update_timer("")
+            elif type == "judge_timer_start":
+                # Clear previous timer state
+                if hasattr(self.app, '_timer_after_id') and self.app._timer_after_id:
+                    self.app.root.after_cancel(self.app._timer_after_id)
+                    self.app._timer_after_id = None
+
+                if isinstance(data, dict):
+                    self.app.current_judge_chunk_size = data.get("size", 1)
+                    self.app.current_judge_chunk_load = data.get("load", 1)
+                else:
+                    self.app.current_judge_chunk_size = data
+                    self.app.current_judge_chunk_load = data * 100
+
+                self.app.resp_timer_seconds = 0
+                self.app.active_phase = "judge"
+
+                # Calculate estimation for judge chunk
+                self.app.est_remaining = self.app._calculate_estimation(self.app.perf_history_judge, self.app.current_judge_chunk_size, self.app.current_judge_chunk_load, min_val=2)
+
+                est_str = f" / ⚖️ Est: {self.app._fmt_seconds(self.app.est_remaining)}" if self.app.est_remaining > 0 else ""
+                self.app.ui.widgets.lbl_timer.config(text=f"⚖️ {self.app._fmt_seconds(self.app.resp_timer_seconds)}{est_str}")
+                self.app._tick_timer()
+            elif type == "judge_timer_stop":
+                load = data if isinstance(data, (int, float)) else getattr(self.app, 'current_judge_chunk_load', self.app.current_judge_chunk_size * 100)
+                if self.app.resp_timer_seconds > 0:
+                    self.app.perf_history_judge.append((self.app.resp_timer_seconds, load))
+                
+                self.app.resp_timer_seconds = -1
+                self.app.active_phase = None
+            elif type == "judge_start":
+                self.app.ui.widgets.lbl_status.config(text="⚖️ JUDGING...", fg="#9b59b6")
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.update_status("⚖️ JUDGING...", "#9b59b6")
+            elif type == "judge_progress":
+                c, t = data
+                self.app.ui.widgets.lbl_status.config(text=f"⚖️ JUDGING {c}/{t}...", fg="#9b59b6")
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.update_status(f"⚖️ JUDGING {c}/{t}...", "#9b59b6")
+            elif type == "judge_stop":
+                self.app.ui.widgets.lbl_status.config(text="")
+                self.app.ui.widgets.lbl_timer.config(text="")
+                self.app.resp_timer_seconds = -1
+                self.app.active_phase = None
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.update_status("Idle", "#7f8c8d")
+                    self.app.shared_state.update_timer("")
+            elif type == "batch_success": 
+                self.app.ui.widgets.lbl_status.config(text="")
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.update_status("Saving Batch...", "#10b981")
+            elif type == "cost":
+                from utils.app_utils import format_cost_display
+                if len(data) == 3:
+                    main_cost, judge_cost, tokens_per_sec = data
+                else:
+                    main_cost, judge_cost = data
+                    tokens_per_sec = 0
+
+                self.app.ui.widgets.lbl_cost.config(text=format_cost_display(main_cost, judge_cost))
+            elif type == "pipeline_telemetry":
+                if data > 0:
+                    self.app.speed_history.append(data)
+                    speed_fmt = f"{data:.2f}" if data < 10 else f"{data:.1f}"
+                    self.app.ui.widgets.lbl_speed.config(text=f"{speed_fmt} ch/s")
+            elif type == "segment":
+                if self.app.ui.widgets.web_gui_var.get():
+                    idx, time_val, eng, heb = data
+                    self.app.shared_state.add_segment(idx, time_val, eng, heb)
+            elif type == "upcoming":
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.set_upcoming(data)
+            elif type == "finished":
+                self.app.is_running = False
+                self.app.resp_timer_seconds = -1
+                self.app.just_finished = True
+                self._toggle_ui_state(tk.NORMAL)
+                self.app.ui.widgets.resume_combo.current(0)
+                self.app.ui.widgets.lbl_eta.config(text="Completed")
+                if data:
+                    p, t = data
+                    self.app.ui.widgets.progress_var.set((p/t*100) if t else 0)
+                    self.app.ui.widgets.lbl_progress.config(text=f"Progress: {p}/{t} ({(p/t*100) if t else 0:.1f}%)")
+                if self.app.ui.widgets.web_gui_var.get():
+                    self.app.shared_state.set_running(False)
+                    self.app.shared_state.update_timer("")
+                    self.app.shared_state.update_eta("Completed", "")
+
+            elif type == "refresh":
+                self.refresh_files()
+            elif type == "intervention_count":
+                if data > 0:
+                    self.app.ui.widgets.lbl_interventions.config(text=f"({data})")
+                else:
+                    self.app.ui.widgets.lbl_interventions.config(text="")
+            elif type == "request_intervention":
+                ans = messagebox.askyesno("Manual Intervention Required", 
+                    f"⚠️ Persistent failure in Batch {data}. \n\nWould you like to manually fix these lines in Notepad?\n(Selecting 'No' will terminate the translation)", 
+                    parent=self.app.root)
+                self.app.engine.intervention_choice_q.put(ans)
+
+        # Update Web Dashboard Active Clients Label
+        if self.app.ui.widgets.web_gui_var.get():
+            count = self.app.shared_state.active_clients
+            if count > 0:
+                self.app.ui.widgets.lbl_web_clients.config(text=f"({count} Active)")
+            else:
+                self.app.ui.widgets.lbl_web_clients.config(text="")
+        else:
+            self.app.ui.widgets.lbl_web_clients.config(text="")
+
+        self.app.root.after(100, self.process_queues)
+
+
