@@ -33,47 +33,7 @@ class TranslatorApp:
 
         self._apply_styles()
 
-        self.smoke_test_settings_opened = False
-        self.smoke_test_checkpoints_opened = False
-        self.smoke_test_lang_changed = False
-        self.smoke_test_debug_toggled = False
-        self.smoke_test_sim_completed = False
 
-        smoke_test_phase = None
-        for i, arg in enumerate(sys.argv):
-            if arg == "--smoke_test":
-                if i + 1 < len(sys.argv) and sys.argv[i+1] in ["1", "2", "3"]:
-                    smoke_test_phase = int(sys.argv[i+1])
-
-        if smoke_test_phase is not None:
-            # Create interactive test banner frame at the top (packed first!)
-            test_frame = tk.Frame(self.root, bg="#f39c12", height=40)
-            test_frame.pack(fill=tk.X, side=tk.TOP, pady=5)
-            
-            lbl_banner = tk.Label(test_frame, text=f"[TESTING MODE: PHASE {smoke_test_phase}]", fg="white", bg="#f39c12", font=("Segoe UI", 11, "bold"))
-            lbl_banner.pack(side=tk.LEFT, padx=10, pady=5)
-            
-            def on_continue():
-                from tkinter import messagebox
-                if smoke_test_phase == 1:
-                    if not self.smoke_test_settings_opened or not self.smoke_test_checkpoints_opened:
-                        messagebox.showwarning("Incomplete", "Please open both Settings and Manage Checkpoints before continuing.")
-                        return
-                elif smoke_test_phase == 2:
-                    if not self.smoke_test_lang_changed or not self.smoke_test_debug_toggled:
-                        messagebox.showwarning("Incomplete", "Please test language changes and debug toggles before continuing.")
-                        return
-                elif smoke_test_phase == 3:
-                    if not self.smoke_test_sim_completed:
-                        messagebox.showwarning("Incomplete", "Please run the simulation to completion before continuing.")
-                        return
-
-                print(f"smoke test {smoke_test_phase} passed", flush=True)
-                self.root.destroy()
-                sys.exit(0)
-                
-            btn_continue = tk.Button(test_frame, text="TEST OK - CONTINUE", command=on_continue, bg="#27ae60", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", padx=10)
-            btn_continue.pack(side=tk.RIGHT, padx=10, pady=5)
 
         # Core State
         self.log_queue = queue.Queue()
@@ -164,23 +124,6 @@ class TranslatorApp:
         self.root.after(100, self.process_queues)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        # Simulation for Smoke Test 3
-        if smoke_test_phase == 3:
-            def fake_start_translation():
-                log(self.log_queue, getattr(self, 'session_log_file', None), "🚀 [SMOKE TEST 3] Simulation started")
-                self.ui_queue.put(("progress", (20, 100)))
-                self.ui_queue.put(("eta", ("00:15", "10:30", 15)))
-                self.ui_queue.put(("cost", (0.01, 0.005, 0)))
-                self.is_running = True
-                self._toggle_ui_state(tk.DISABLED)
-                def stop_sim():
-                    log(self.log_queue, getattr(self, 'session_log_file', None), "✅ [SMOKE TEST 3] Simulation completed")
-                    self.smoke_test_sim_completed = True
-                    self.is_running = False
-                    self._toggle_ui_state(tk.NORMAL)
-                self.root.after(2000, stop_sim)
-                
-            self.ui.widgets.btn_start.config(command=fake_start_translation)
 
 
     # --- Actions ---
