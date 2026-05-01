@@ -17,6 +17,8 @@ from ui.gui_windows import LiveViewer, SettingsWindow, CheckpointsWindow
 from utils.app_utils import log, format_cost_display, get_eta_string
 from ui.ui_layout import MainUILayout
 from core.translation_engine import TranslationEngine
+from ui.ui_controller import UIController
+
 
 # Web GUI Modules
 from utils.shared_state import SharedState
@@ -30,6 +32,48 @@ class TranslatorApp:
         self.root.geometry("698x750")
 
         self._apply_styles()
+
+        self.smoke_test_settings_opened = False
+        self.smoke_test_checkpoints_opened = False
+        self.smoke_test_lang_changed = False
+        self.smoke_test_debug_toggled = False
+        self.smoke_test_sim_completed = False
+
+        smoke_test_phase = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--smoke_test":
+                if i + 1 < len(sys.argv) and sys.argv[i+1] in ["1", "2", "3"]:
+                    smoke_test_phase = int(sys.argv[i+1])
+
+        if smoke_test_phase is not None:
+            # Create interactive test banner frame at the top (packed first!)
+            test_frame = tk.Frame(self.root, bg="#f39c12", height=40)
+            test_frame.pack(fill=tk.X, side=tk.TOP, pady=5)
+            
+            lbl_banner = tk.Label(test_frame, text=f"[TESTING MODE: PHASE {smoke_test_phase}]", fg="white", bg="#f39c12", font=("Segoe UI", 11, "bold"))
+            lbl_banner.pack(side=tk.LEFT, padx=10, pady=5)
+            
+            def on_continue():
+                from tkinter import messagebox
+                if smoke_test_phase == 1:
+                    if not self.smoke_test_settings_opened or not self.smoke_test_checkpoints_opened:
+                        messagebox.showwarning("Incomplete", "Please open both Settings and Manage Checkpoints before continuing.")
+                        return
+                elif smoke_test_phase == 2:
+                    if not self.smoke_test_lang_changed or not self.smoke_test_debug_toggled:
+                        messagebox.showwarning("Incomplete", "Please test language changes and debug toggles before continuing.")
+                        return
+                elif smoke_test_phase == 3:
+                    if not self.smoke_test_sim_completed:
+                        messagebox.showwarning("Incomplete", "Please run the simulation to completion before continuing.")
+                        return
+
+                print(f"smoke test {smoke_test_phase} passed", flush=True)
+                self.root.destroy()
+                sys.exit(0)
+                
+            btn_continue = tk.Button(test_frame, text="TEST OK - CONTINUE", command=on_continue, bg="#27ae60", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", padx=10)
+            btn_continue.pack(side=tk.RIGHT, padx=10, pady=5)
 
         # Core State
         self.log_queue = queue.Queue()
@@ -76,8 +120,18 @@ class TranslatorApp:
         self.web_server_started = False
 
         # UI & Engine Initialization
+        self.ui_controller = UIController(self)
+        self.open_settings = self.ui_controller.open_settings
+        self.open_checkpoints_manager = self.ui_controller.open_checkpoints_manager
+        self.open_orig_srt = self.ui_controller.open_orig_srt
+        self.open_translated_srt = self.ui_controller.open_translated_srt
+        self.open_prompt_generator = self.ui_controller.open_prompt_generator
+        self.restart_app = self.ui_controller.restart_app
+
+
         self.ui = MainUILayout(self.root)
         self.ui.setup(self)
+
 
         # Multi-Language Bindings
         self.ui.widgets.source_combo.bind("<<ComboboxSelected>>", self.on_language_change)
@@ -92,6 +146,24 @@ class TranslatorApp:
         self.refresh_languages_ui()
         self.root.after(100, self.process_queues)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # Simulation for Smoke Test 3
+        if smoke_test_phase == 3:
+            def fake_start_translation():
+                log(self.log_queue, getattr(self, 'session_log_file', None), "🚀 [SMOKE TEST 3] Simulation started")
+                self.ui_queue.put(("progress", (20, 100)))
+                self.ui_queue.put(("eta", ("00:15", "10:30", 15)))
+                self.ui_queue.put(("cost", (0.01, 0.005, 0)))
+                self.is_running = True
+                self._toggle_ui_state(tk.DISABLED)
+                def stop_sim():
+                    log(self.log_queue, getattr(self, 'session_log_file', None), "✅ [SMOKE TEST 3] Simulation completed")
+                    self.smoke_test_sim_completed = True
+                    self.is_running = False
+                    self._toggle_ui_state(tk.NORMAL)
+                self.root.after(2000, stop_sim)
+                
+            self.ui.widgets.btn_start.config(command=fake_start_translation)
 
 
     # --- UI Event Handlers ---
@@ -110,6 +182,7 @@ class TranslatorApp:
         self.on_language_change() # Trigger initial output_dir sync
 
     def on_language_change(self, event=None):
+        self.smoke_test_lang_changed = True
         source = self.ui.widgets.source_lang_var.get()
         target_code = self.ui.widgets.target_lang_var.get()
         
@@ -231,6 +304,7 @@ class TranslatorApp:
     # --- Actions ---
 
     def toggle_debug_mode(self):
+        self.smoke_test_debug_toggled = True
         is_debug = self.ui.widgets.debug_var.get()
         if is_debug:
             ans = messagebox.askyesno("Enable Debug Mode", "Enabling Debug Mode will write massive Input/Output transactions to the log file for EVERY batch.\n\nThis can cause your .txt log files to become extremely large.\n\nAre you sure you want to enable this?", parent=self.root)
@@ -355,7 +429,9 @@ class TranslatorApp:
         
         # Decide what to select
         current_val = self.ui.widgets.resume_var.get()
-        if not current_val or current_val.startswith("[0]"):
+        if getattr(self, 'just_finished', False):
+            self.just_finished = False
+        elif not current_val or current_val.startswith("[0]"):
             if auto_select_idx > 0:
                 self.ui.widgets.resume_combo.current(auto_select_idx)
                 self.on_resume_selection()
@@ -363,26 +439,6 @@ class TranslatorApp:
                 self.ui.widgets.resume_combo.current(0)
         
         log(self.log_queue, self.session_log_file, "✅ File lists refreshed.")
-
-    def open_prompt_generator(self):
-        """Launches the prompt_generator.pyw utility."""
-        try:
-            script_path = os.path.join(self.curr_dir, "prompt_generator.pyw")
-            if os.path.exists(script_path):
-                subprocess.Popen([sys.executable, script_path])
-            else:
-                messagebox.showerror("Error", f"Could not find {script_path}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to launch Prompt Generator: {e}")
-
-    def restart_app(self):
-        """Cleanly restarts the entire application to reload code changes."""
-        log(self.log_queue, self.session_log_file, "🔄 Restarting application to reload modules...")
-        self.on_closing() # Trigger cleanup
-        
-        # Replace current process with a fresh one
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
 
     def start_translation(self):
         if self.is_running: return
@@ -737,10 +793,19 @@ class TranslatorApp:
             elif type == "finished":
                 self.is_running = False
                 self.resp_timer_seconds = -1
+                self.just_finished = True
                 self._toggle_ui_state(tk.NORMAL)
+                self.ui.widgets.resume_combo.current(0)
+                self.ui.widgets.lbl_eta.config(text="Completed")
+                if data:
+                    p, t = data
+                    self.ui.widgets.progress_var.set((p/t*100) if t else 0)
+                    self.ui.widgets.lbl_progress.config(text=f"Progress: {p}/{t} ({(p/t*100) if t else 0:.1f}%)")
                 if self.ui.widgets.web_gui_var.get():
                     self.shared_state.set_running(False)
                     self.shared_state.update_timer("")
+                    self.shared_state.update_eta("Completed", "")
+
             elif type == "refresh":
                 self.refresh_files()
             elif type == "intervention_count":
@@ -782,23 +847,6 @@ class TranslatorApp:
         self.ui.widgets.model_combo['values'] = model_list
         self.ui.widgets.judge_model_combo['values'] = model_list
         self.on_model_change()
-
-    # --- Secondary Windows / Helpers ---
-    def open_settings(self): SettingsWindow(self.root, self)
-    def open_checkpoints_manager(self): CheckpointsWindow(self.root, self)
-    def open_orig_srt(self): 
-        path = os.path.join(self.english_subs_dir, self.ui.widgets.srt_var.get())
-        if os.path.exists(path): subprocess.Popen(['notepad.exe', path])
-    def open_translated_srt(self):
-        if hasattr(self.engine, 'current_output_file') and self.engine.current_output_file:
-            path = os.path.join(self.english_subs_dir, self.ui.widgets.srt_var.get())
-            self.ui.widgets.btn_open_translated.config(state=tk.DISABLED)
-            
-            def re_enable():
-                self.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
-                
-            profile = SETTINGS.get_active_profile()
-            LiveViewer(self.root, path, self.engine.current_output_file, profile=profile, on_close=re_enable)
 
     def _apply_styles(self):
         style = ttk.Style()
@@ -976,7 +1024,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TranslatorApp(root)
     
-    if "--smoke_test" in sys.argv:
+    if "--smoke_test" in sys.argv and not any(arg in ["1", "2", "3"] for arg in sys.argv):
         print("Smoke test: Initializing integrity checks...")
         def run_smoke_test():
             try:

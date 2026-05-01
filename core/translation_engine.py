@@ -1184,7 +1184,7 @@ class TranslationEngine:
         except Exception as e:
             log(self.log_queue, config.get("session_log_file"), f"❌ Fatal Error: {e}")
         finally:
-            self.ui_queue.put(("finished", None))
+            self.ui_queue.put(("finished", (processed, total_blocks) if 'processed' in locals() and 'total_blocks' in locals() else None))
             self.ui_queue.put(("refresh", None))
 
     def _perform_manual_intervention(self, indices, metadata, failed_dict, audit_reason_native, scratch_dir, profile=None):
