@@ -128,6 +128,17 @@ class TranslatorApp:
         self.open_prompt_generator = self.ui_controller.open_prompt_generator
         self.restart_app = self.ui_controller.restart_app
 
+        self.refresh_languages_ui = self.ui_controller.refresh_languages_ui
+        self.on_language_change = self.ui_controller.on_language_change
+        self.on_model_change = self.ui_controller.on_model_change
+        self.on_resume_selection = self.ui_controller.on_resume_selection
+        self.toggle_debug_mode = self.ui_controller.toggle_debug_mode
+        self.toggle_web_gui = self.ui_controller.toggle_web_gui
+        self.toggle_bypass_intervention = self.ui_controller.toggle_bypass_intervention
+        self.refresh_files = self.ui_controller.refresh_files
+        self._toggle_ui_state = self.ui_controller._toggle_ui_state
+        self.refresh_models_ui = self.ui_controller.refresh_models_ui
+
 
         self.ui = MainUILayout(self.root)
         self.ui.setup(self)
@@ -167,65 +178,6 @@ class TranslatorApp:
 
 
     # --- UI Event Handlers ---
-
-    def refresh_languages_ui(self):
-        from core.language_profiles import BUILT_IN_PROFILES
-        codes = sorted(BUILT_IN_PROFILES.keys())
-        self.ui.widgets.source_combo['values'] = codes
-        self.ui.widgets.target_combo['values'] = codes
-        
-        # Load from settings
-        trans_cfg = SETTINGS.config.get("translation", {})
-        self.ui.widgets.source_lang_var.set(trans_cfg.get("source_lang_code", "en"))
-        self.ui.widgets.target_lang_var.set(trans_cfg.get("target_lang_code", "he"))
-        
-        self.on_language_change() # Trigger initial output_dir sync
-
-    def on_language_change(self, event=None):
-        self.smoke_test_lang_changed = True
-        source = self.ui.widgets.source_lang_var.get()
-        target_code = self.ui.widgets.target_lang_var.get()
-        
-        # 1. Update config FIRST to ensure SETTINGS.get_active_profile() works correctly
-        if "translation" not in SETTINGS.config:
-            SETTINGS.config["translation"] = {}
-            
-        SETTINGS.config["translation"]["source_lang_code"] = source
-        SETTINGS.config["translation"]["target_lang_code"] = target_code
-        SETTINGS.save_settings()
-
-        # 2. Now fetch the profile (it will reflect the new target_code)
-        profile = SETTINGS.get_active_profile()
-
-        # Update source and output directories dynamically
-        self.english_subs_dir = os.path.join(self.curr_dir, f"{profile.source_lang} subtitles")
-        self.output_dir = os.path.join(self.curr_dir, f"Translated {profile.target_lang} subtitles")
-        
-        for d in [self.english_subs_dir, self.output_dir]:
-            os.makedirs(d, exist_ok=True)
-        
-        if not self.is_running:
-            self.refresh_files()
-            log(self.log_queue, self.session_log_file, f"🌐 Profile: {profile.source_lang} → {profile.target_lang}")
-
-    def on_model_change(self, event=None):
-
-        idx_str = self.ui.widgets.model_var.get().split(" - ")[0]
-        if idx_str in SETTINGS.config["models"]:
-            self.ui.widgets.batch_size_var.set(str(SETTINGS.config["models"][idx_str]['batch_size']))
-
-    def on_resume_selection(self, event=None):
-        resume_val = self.ui.widgets.resume_var.get()
-        if not resume_val or resume_val.startswith("[0]"):
-            self._reset_ui_for_new_session()
-            return
-        
-        match = re.search(r'\[(\d+)\]', resume_val)
-        if match:
-            choice_idx = int(match.group(1))
-            if 0 < choice_idx <= len(self.available_checkpoints):
-                ckpt = self.available_checkpoints[choice_idx - 1]
-                self._update_ui_from_checkpoint(ckpt)
 
     def _reset_ui_for_new_session(self):
         self.ui.widgets.progress_var.set(0)
@@ -303,60 +255,6 @@ class TranslatorApp:
 
     # --- Actions ---
 
-    def toggle_debug_mode(self):
-        self.smoke_test_debug_toggled = True
-        is_debug = self.ui.widgets.debug_var.get()
-        if is_debug:
-            ans = messagebox.askyesno("Enable Debug Mode", "Enabling Debug Mode will write massive Input/Output transactions to the log file for EVERY batch.\n\nThis can cause your .txt log files to become extremely large.\n\nAre you sure you want to enable this?", parent=self.root)
-            if not ans:
-                self.ui.widgets.debug_var.set(False)
-                return
-                
-        state_str = "ENABLED" if is_debug else "DISABLED"
-        if hasattr(self, 'engine'):
-            self.engine.debug_mode = is_debug
-        log(self.log_queue, getattr(self, 'session_log_file', None), f"\n🐞 Debug Mode {state_str}\n")
-                
-    def toggle_web_gui(self):
-        is_enabled = self.ui.widgets.web_gui_var.get()
-        if is_enabled:
-            # First time enablement check
-            if not self.web_server_started:
-                log(self.log_queue, self.session_log_file, "🌐 Initiating Web Dashboard binding...")
-                threading.Thread(target=start_web_server, args=(self.shared_state, "0.0.0.0", None, self.log_queue), daemon=True).start()
-                self.web_server_started = True
-                # Give the server thread ~300ms to bind and write web_port, then update the label
-                self.root.after(300, self._update_web_port_label)
-            else:
-                port = self.shared_state.web_port or 7860
-                log(self.log_queue, self.session_log_file, f"🌐 Web Dashboard updates resumed. (http://localhost:{port})")
-        else:
-            log(self.log_queue, self.session_log_file, "🌐 Web Dashboard updates paused.")
-                
-    def toggle_bypass_intervention(self):
-        """Toggles bypass intervention mode. Enabling requires explicit user acknowledgement."""
-        if self.ui.widgets.bypass_intervention_var.get():
-            ans = messagebox.askyesno(
-                "⚠️ Enable Bypass Intervention Mode",
-                "By enabling 'Bypass Intervention', the engine will automatically use a "
-                "cleaned-up version of a failed AI output instead of pausing for manual correction.\n\n"
-                "⚠️ This WILL introduce translation errors into your output file.\n\n"
-                "A dedicated bypass log will be created so you can review and fix affected "
-                "segments after the session ends.\n\n"
-                "Do you understand and wish to proceed?",
-                parent=self.root
-            )
-            if not ans:
-                self.ui.widgets.bypass_intervention_var.set(False)
-                return
-            log(self.log_queue, self.session_log_file, "🚫 [BYPASS] Bypass Intervention Mode ENABLED — errors will be auto-logged.")
-            if hasattr(self, 'engine'):
-                self.engine.bypass_intervention = True
-        else:
-            log(self.log_queue, self.session_log_file, "🚫 [BYPASS] Bypass Intervention Mode DISABLED.")
-            if hasattr(self, 'engine'):
-                self.engine.bypass_intervention = False
-
     def _update_web_port_label(self):
         """Called ~300ms after the web server thread starts to display the actual bound port."""
         port = self.shared_state.web_port
@@ -366,79 +264,6 @@ class TranslatorApp:
         else:
             # Server hasn't bound yet — retry once more after another 500ms
             self.root.after(500, self._update_web_port_label)
-
-    def refresh_files(self):
-        source_code = self.ui.widgets.source_lang_var.get()
-        target_code = self.ui.widgets.target_lang_var.get()
-
-        all_sysprm = sorted([f for f in os.listdir(self.sysprm_dir) if f.lower().endswith('.sysprm')])
-        
-        filtered_sysprm = []
-        for f_name in all_sysprm:
-            path = os.path.join(self.sysprm_dir, f_name)
-            try:
-                # Use utf-8-sig to handle possible BOM
-                with open(path, 'r', encoding='utf-8-sig') as f:
-                    data = json.load(f)
-                    lang_cfg = data.get("language", {})
-                    if lang_cfg.get("source") == source_code and lang_cfg.get("target") == target_code:
-                        filtered_sysprm.append(f_name)
-            except Exception:
-                pass # Skip files that aren't valid JSON or don't match
-
-        srt_files = sorted([f for f in os.listdir(self.english_subs_dir) if f.endswith('.srt')])
-        self.ui.widgets.srt_combo['values'] = srt_files
-        self.ui.widgets.sysprm_combo['values'] = filtered_sysprm
-        
-        # If current selection is no longer in the list, clear it
-        if self.ui.widgets.sysprm_var.get() not in filtered_sysprm:
-            self.ui.widgets.sysprm_var.set("")
-
-        # Scan for Checkpoints
-        self.available_checkpoints = []
-        current_srt = self.ui.widgets.srt_var.get()
-        try:
-            for f in os.listdir(self.checkpoint_dir):
-                if re.match(r'^translator_checkpoint_\d+\.json$', f):
-                    path = os.path.join(self.checkpoint_dir, f)
-                    mtime = os.path.getmtime(path)
-                    with open(path, 'r', encoding='utf-8') as cp:
-                        data = json.load(cp)
-                        if data.get("processed", 0) > 0 and (data.get("pid") == os.getpid() or not is_process_alive(data.get("pid"))):
-                            data["file_path"] = path
-                            data["mtime"] = mtime
-                            self.available_checkpoints.append(data)
-            
-            # Sort: Newest first
-            self.available_checkpoints.sort(key=lambda x: x.get("mtime", 0), reverse=True)
-        except Exception: pass
-
-        resume_options = ["[0] Start a NEW session (Ignore checkpoints)"]
-        auto_select_idx = 0
-        
-        for i, ckpt in enumerate(self.available_checkpoints):
-            total_str = f"/{ckpt['total_blocks']}" if ckpt['total_blocks'] else ""
-            display_name = f"[{i+1}] Resume: {os.path.basename(ckpt['srt_file'])} ({ckpt['processed']}{total_str} blocks)"
-            resume_options.append(display_name)
-            
-            # Auto-latch logic: If we have a match for the current SRT and we haven't selected anything yet (or were in new session)
-            if auto_select_idx == 0 and os.path.basename(ckpt['srt_file']) == current_srt:
-                auto_select_idx = i + 1
-
-        self.ui.widgets.resume_combo['values'] = resume_options
-        
-        # Decide what to select
-        current_val = self.ui.widgets.resume_var.get()
-        if getattr(self, 'just_finished', False):
-            self.just_finished = False
-        elif not current_val or current_val.startswith("[0]"):
-            if auto_select_idx > 0:
-                self.ui.widgets.resume_combo.current(auto_select_idx)
-                self.on_resume_selection()
-            else:
-                self.ui.widgets.resume_combo.current(0)
-        
-        log(self.log_queue, self.session_log_file, "✅ File lists refreshed.")
 
     def start_translation(self):
         if self.is_running: return
@@ -832,21 +657,6 @@ class TranslatorApp:
             self.ui.widgets.lbl_web_clients.config(text="")
 
         self.root.after(100, self.process_queues)
-
-    def _toggle_ui_state(self, state):
-        for w in [self.ui.widgets.model_combo, self.ui.widgets.batch_entry, self.ui.widgets.srt_combo, 
-                  self.ui.widgets.sysprm_combo, self.ui.widgets.judge_model_combo, self.ui.widgets.judge_batch_entry,
-                  self.ui.widgets.resume_combo, self.ui.widgets.btn_settings, self.ui.widgets.btn_manage_checkpoints,
-                  self.ui.widgets.btn_restart, self.ui.widgets.btn_start]:
-            w.config(state=state)
-        self.ui.widgets.btn_stop.config(state=tk.NORMAL if state == tk.DISABLED else tk.DISABLED)
-        self.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
-
-    def refresh_models_ui(self):
-        model_list = [f"{k} - {v['name']} ({v['provider']})" for k, v in SETTINGS.config["models"].items()]
-        self.ui.widgets.model_combo['values'] = model_list
-        self.ui.widgets.judge_model_combo['values'] = model_list
-        self.on_model_change()
 
     def _apply_styles(self):
         style = ttk.Style()
