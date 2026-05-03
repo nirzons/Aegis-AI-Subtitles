@@ -108,18 +108,20 @@ from core.llm.providers.openai import call_openai
 from core.llm.providers.deepseek import call_deepseek
 from core.llm.providers.lmstudio import call_lmstudio
 
+_PROVIDER_REGISTRY = {
+    'google': call_google,
+    'openai': call_openai,
+    'deepseek': call_deepseek,
+    'lmstudio': call_lmstudio,
+}
+
 def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False, response_format=None, profile=None):
     provider = model_cfg.get('provider')
-    if provider == 'google':
-        return call_google(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
-    elif provider == 'openai':
-        return call_openai(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
-    elif provider == 'deepseek':
-        return call_deepseek(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
-    elif provider == 'lmstudio':
-        return call_lmstudio(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
-    else:
+    handler = _PROVIDER_REGISTRY.get(provider)
+    if not handler:
         raise ValueError(f"Unknown or unsupported provider: {provider}")
+    return handler(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
+
 
 
 
