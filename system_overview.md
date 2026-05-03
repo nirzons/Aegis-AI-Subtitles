@@ -21,7 +21,13 @@ Decoupled event controller extracting menu handlers, single-callback events, and
 
 ### 3. Core Logic (`core/`)
 The engine room of Aegis, containing the primary translation and auditing logic.
-- **`translation_engine.py`**: Manages the main translation loop, batching, and schema recovery logic. It employs a **Flattened Sandwich Schema** (`Thought` -> `Summary` -> `Work` -> `Metadata`) for optimal KV cache usage.
+- **`translation_engine.py`**: A clean facade forwarding execution directly to the extracted pipeline.
+- **`core/translation/` package**: Isolated single-responsibility submodules containing core execution stages:
+  - **`pipeline.py`**: Manages the main translation orchestration loop, batching, and async threads.
+  - **`cost_calculator.py`**: Calculates token financial costs and model caching percentages.
+  - **`schema_recovery.py`**: Reconstructs outputs when LLMs hallucinate JSON keys.
+  - **`prompt_builder.py`**: Aggregates metadata, character context, and past dialogues into prompts.
+  - **`text_cleaner.py`**: Preprocesses inputs, stripping inline italic formats and screen alignment tags.
 - **`audit_manager.py`**: Orchestrates the multi-tier validation pipeline, including heuristic checks and coordination with the AI Judge.
 - **`llm_api.py`**: A unified abstraction layer for multiple providers (Gemini, OpenAI, DeepSeek, and local LM Studio) with support for structured outputs and reasoning tokens.
 - **`text_processing.py`**: Handles low-level text manipulations, RTL fixes, JSON pre-repair, and heuristic "Shield" checks.
