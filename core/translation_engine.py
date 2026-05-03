@@ -49,125 +49,13 @@ class TranslationEngine:
         self.should_stop = True
 
     def _calculate_costs(self, tokens_in, tokens_out, tokens_cached, tokens_reasoning, cfg):
-        """
-        Calculates the financial cost of a single API interaction, factoring in:
-        1. Context caching discounts (if using deepseek or supported endpoints).
-        2. Hardware tokens tracking vs. Local model zero-costs.
-        3. Reasoning load percentages for GPT-5/o1/Thinker models.
-        """
-        discount = cfg.get('cache_discount', 0.0)
-        hit_pct = 0
-
-        # Local providers (lmstudio) don't incur financial cost, so we just track token volume
-        if cfg.get('provider') == 'lmstudio':
-            cost = tokens_in + tokens_out
-            hit_str = ""
-        elif discount > 0 and tokens_in > 0:
-            miss_tokens = tokens_in - tokens_cached
-            # Calculate cost considering the discounted cache-hit price
-            cache_hit_price = cfg['input_price'] * (1 - (discount / 100.0))
-            cost = (miss_tokens / 1e6 * cfg['input_price']) + (tokens_cached / 1e6 * cache_hit_price) + (tokens_out / 1e6 * cfg['output_price'])
-            hit_pct = (tokens_cached/tokens_in*100)
-            hit_str = f" [Hit: {tokens_cached:,} ({hit_pct:.1f}%)]"
-        else:
-            # Standard API pricing without caching discount
-            cost = (tokens_in / 1e6 * cfg['input_price']) + (tokens_out / 1e6 * cfg['output_price'])
-            hit_str = ""
-
-        # Measure 'Brain Load' - How much token overhead the model spent specifically on Reasoning vs Generation
-        brain_load = (tokens_reasoning / tokens_out * 100) if tokens_out > 0 else 0
-        brain_str = f" | 🧠 Brain: {tokens_reasoning:,} ({brain_load:.1f}%)" if tokens_reasoning > 0 else ""
-        
-        legacy_res = (cost, hit_str, hit_pct, brain_str)
-
         from core.translation.cost_calculator import calculate_costs
-        new_res = calculate_costs(tokens_in, tokens_out, tokens_cached, tokens_reasoning, cfg)
-
-        if legacy_res != new_res:
-            err_msg = f"💥 Cost Calculator Delta mismatch! Legacy: {legacy_res}, Extracted: {new_res}"
-            log(self.log_queue, None, err_msg)
-            raise RuntimeError(err_msg)
-
-        return legacy_res
+        return calculate_costs(tokens_in, tokens_out, tokens_cached, tokens_reasoning, cfg)
 
     def _recover_schema(self, res_json, stats, session_log_file):
-        """
-        Attempts to gracefully recover the required output structure when LLMs hallucinate JSON keys.
-        Particularly necessary for high-temperature models or deeply analytical GPT-5 models that 
-        sometimes ignore the strict envelope keys and wrap the indices in custom objects.
-        """
-        import copy
-        res_json_legacy = copy.deepcopy(res_json)
-        res_json_new = copy.deepcopy(res_json)
-
-        recovered = False
-        if 'translated_srt' not in res_json_legacy:
-            # Fallback 1: Common hallucinated root keys
-            possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
-            for pk in possible_keys:
-                if pk in res_json_legacy and isinstance(res_json_legacy[pk], dict):
-                    res_json_legacy['translated_srt'] = res_json_legacy[pk]
-                    recovered = True
-                    log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from hallucinated key: '{pk}'")
-                    break
-            
-            if not recovered:
-                # Fallback 2: Check if any internal dictionary happens to use numeric string keys 
-                # (which would correspond to specific subtitle indices)
-                for key, value in res_json_legacy.items():
-                    if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
-                        res_json_legacy['translated_srt'] = value
-                        recovered = True
-                        log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from inferred dictionary: '{key}'")
-                        break
-            
-            if not recovered:
-                # Fallback 3: The LLM flat-dumped the indices into the root instead of nesting them
-                if any(str(k).isdigit() for k in res_json_legacy.keys()):
-                    res_json_legacy = {'translated_srt': res_json_legacy}
-                    recovered = True
-                    log(self.log_queue, session_log_file, "   ↳ 💡 Recovered schema from root-level flat dictionary")
-
-        if 'translated_srt' not in res_json_legacy or not isinstance(res_json_legacy['translated_srt'], dict):
-            raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json_legacy.keys())}")
-
-        legacy_res = res_json_legacy['translated_srt']
-
         from core.translation.schema_recovery import recover_schema
-        stats_copy = copy.deepcopy(stats)
-        new_res = recover_schema(res_json_new, stats_copy, session_log_file, log_queue=self.log_queue)
+        return recover_schema(res_json, stats, session_log_file, log_queue=self.log_queue)
 
-        if legacy_res != new_res:
-            err_msg = f"💥 Schema Recovery Delta mismatch! Legacy: {legacy_res}, Extracted: {new_res}"
-            log(self.log_queue, None, err_msg)
-            raise RuntimeError(err_msg)
-
-        # Apply mutation to real in-place objects after validation succeeds
-        if 'translated_srt' not in res_json:
-            recovered = False
-            possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
-            for pk in possible_keys:
-                if pk in res_json and isinstance(res_json[pk], dict):
-                    res_json['translated_srt'] = res_json[pk]
-                    recovered = True
-                    break
-            
-            if not recovered:
-                for key, value in res_json.items():
-                    if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
-                        res_json['translated_srt'] = value
-                        recovered = True
-                        break
-            
-            if not recovered:
-                if any(str(k).isdigit() for k in res_json.keys()):
-                    res_json = {'translated_srt': res_json}
-                    recovered = True
-
-            if recovered:
-                stats["schema_recoveries"] += 1
-
-        return res_json['translated_srt']
 
     def run_translation(self, config):
         from core.translation.pipeline import run_pipeline

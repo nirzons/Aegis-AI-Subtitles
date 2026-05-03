@@ -230,25 +230,9 @@ def run_pipeline(self, config):
         tech_rules = build_technical_rules(profile)
         tech_rules = tech_rules.replace("[IDX_TECH]", str(idx_tech)).replace("[IDX_CLEAN]", str(idx_clean))
 
-        system_prompt_parts = []
-        if prompt_prefix:
-            system_prompt_parts.append(prompt_prefix)
-        if series_context:
-            system_prompt_parts.append(series_context.strip())
-        system_prompt_parts.append(sys_inst.strip())
-        system_prompt_parts.append(tech_rules.strip())
-        
-        legacy_sys = "\n\n".join(system_prompt_parts) + "\n"
-
         from core.translation.prompt_builder import build_system_prompt
-        new_sys = build_system_prompt(profile, model_cfg, idx_workflow, idx_tech, idx_clean, prompt_prefix, series_context)
+        system_prompt = build_system_prompt(profile, model_cfg, idx_workflow, idx_tech, idx_clean, prompt_prefix, series_context)
 
-        if legacy_sys != new_sys:
-            err_msg = "💥 System Prompt building Delta mismatch!"
-            log(self.log_queue, None, err_msg)
-            raise RuntimeError(err_msg)
-
-        system_prompt = legacy_sys
         
         # Efficiency/Quality logging
         log(self.log_queue, session_log_file, f"🚀 [Mode: {'High-Quality (Scratchpad)' if use_scratchpad else 'Efficiency (Direct)'}] Starting translation with {model_cfg['name']}...")
@@ -442,53 +426,10 @@ def run_pipeline(self, config):
                             input_payload[idx] = ""
 
                     # --- Tag Passthrough: Pre-Processing ---
-                    # We identify and strip special tags to simplify the LLM payload.
-                    batch_italic_indices = set()
-                    batch_alignment_map = {} # stores {line_idx: pos} for each subtitle index
-                    final_input_payload = {}
-                    
-                    for idx, txt in input_payload.items():
-                        lines = txt.split('\n')
-                        cleaned_lines = []
-                        subtitle_aligns = {}
-                        
-                        for i, line in enumerate(lines):
-                            l_strip = line.strip()
-                            align_match = RE_ALIGNMENT.match(l_strip)
-                            if align_match:
-                                subtitle_aligns[i] = align_match.group('pos')
-                                cleaned_lines.append(align_match.group('rest').strip())
-                            else:
-                                cleaned_lines.append(line)
-                        
-                        if subtitle_aligns:
-                            batch_alignment_map[idx] = subtitle_aligns
-                        
-                        current_txt = '\n'.join(cleaned_lines).strip()
-
-                        # 2. Italic Strip: Check for <i>...</i>
-                        match_s = RE_ITALIC_S.match(current_txt)
-                        match_d = RE_ITALIC_D.match(current_txt)
-                        
-                        if match_s:
-                            # Case 1: Single wrap (even if multi-line)
-                            final_input_payload[idx] = match_s.group('c').strip()
-                            batch_italic_indices.add(idx)
-                        elif match_d:
-                            # Case 2: Double wrap (each line has its own pair)
-                            final_input_payload[idx] = f"{match_d.group('c1').strip()}\n{match_d.group('c2').strip()}"
-                            batch_italic_indices.add(idx)
-                        else:
-                            # Case 3: Mixed text or complex tags - leave current_txt (which might have had align stripped)
-                            final_input_payload[idx] = current_txt
-                            
+                    # --- Tag Passthrough: Pre-Processing ---
                     from core.translation.text_cleaner import clean_and_strip_tags
-                    new_final_input, new_italic_indices, new_alignment_map = clean_and_strip_tags(input_payload, profile)
+                    final_input_payload, batch_italic_indices, batch_alignment_map = clean_and_strip_tags(input_payload, profile)
 
-                    if final_input_payload != new_final_input or batch_italic_indices != new_italic_indices or batch_alignment_map != new_alignment_map:
-                        err_msg = "💥 Text Cleaner Delta mismatch!"
-                        log(self.log_queue, None, err_msg)
-                        raise RuntimeError(err_msg)
                             
                     if batch_italic_indices and getattr(self, 'debug_mode', False):
                         log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Stripped outer italics for indices: {', '.join(sorted(batch_italic_indices))}")
@@ -588,49 +529,13 @@ def run_pipeline(self, config):
                     rule_indices = get_exact_indices_rule(profile, indices)
                     rule_do_not_translate = get_do_not_translate_rule(profile)
 
-                    user_prompt = f"""
-{user_prompt_prefix}
-{warning_section}
-{context_section}
-
-{text_chunk}
-
-{tech_rules_header}
-{rule_count}
-{rule_indices}
-{rule_do_not_translate}
-{tag_rule}
-{schema_instruction}
-"""
-
-                    feedback_injection = ""
-                    # If there is a judge error, and at least one index is shared between current batch and rejected batch
-                    if last_judge_error and set(indices).intersection(last_judged_indices):
-                        idx_label = profile.native_index_label if profile.use_native_instructions else "Index"
-                        feedback_injection = "\n" + (profile.native_feedback_header if profile.use_native_instructions else "### YOU MUST FIX THE FOLLOWING ERRORS BY INDEX (DO NOT REPEAT THESE MISTAKES): ###") + "\n"
-                        
-                        if isinstance(last_judge_error, dict):
-                            for err_idx, err_msg in last_judge_error.items():
-                                if err_idx in ["GLOBAL", "GENERAL", "general"] or str(err_idx).startswith("chunk_") or err_idx in indices or str(err_idx) in [str(i) for i in indices]:
-                                    prefix = f"{idx_label} {err_idx}: " if err_idx not in ["GLOBAL", "GENERAL", "general"] and not str(err_idx).startswith("chunk_") else ""
-                                    feedback_injection += f"{prefix}{err_msg}\n"
-                        else:
-                            feedback_injection += f"{last_judge_error}\n"
-                        
-                        feedback_injection += "----------------------------------------\n"
-                    final_prompt = user_prompt + feedback_injection
-
                     from core.translation.prompt_builder import build_user_prompt
-                    new_user_prompt = build_user_prompt(
+                    final_prompt = build_user_prompt(
                         profile, model_cfg, context_state, expected_count, indices, 
                         text_chunk, input_payload, use_scratchpad, warning_section, 
                         tag_rule, last_judge_error, last_judged_indices
                     )
 
-                    if final_prompt != new_user_prompt:
-                        err_msg = "💥 User Prompt building Delta mismatch!"
-                        log(self.log_queue, None, err_msg)
-                        raise RuntimeError(err_msg)
 
                     raw_res = None
                     _batch_system_prompt = system_prompt
