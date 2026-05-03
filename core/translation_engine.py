@@ -78,7 +78,17 @@ class TranslationEngine:
         brain_load = (tokens_reasoning / tokens_out * 100) if tokens_out > 0 else 0
         brain_str = f" | 🧠 Brain: {tokens_reasoning:,} ({brain_load:.1f}%)" if tokens_reasoning > 0 else ""
         
-        return cost, hit_str, hit_pct, brain_str
+        legacy_res = (cost, hit_str, hit_pct, brain_str)
+
+        from core.translation.cost_calculator import calculate_costs
+        new_res = calculate_costs(tokens_in, tokens_out, tokens_cached, tokens_reasoning, cfg)
+
+        if legacy_res != new_res:
+            err_msg = f"💥 Cost Calculator Delta mismatch! Legacy: {legacy_res}, Extracted: {new_res}"
+            log(self.log_queue, None, err_msg)
+            raise RuntimeError(err_msg)
+
+        return legacy_res
 
     def _recover_schema(self, res_json, stats, session_log_file):
         """
@@ -86,13 +96,17 @@ class TranslationEngine:
         Particularly necessary for high-temperature models or deeply analytical GPT-5 models that 
         sometimes ignore the strict envelope keys and wrap the indices in custom objects.
         """
+        import copy
+        res_json_legacy = copy.deepcopy(res_json)
+        res_json_new = copy.deepcopy(res_json)
+
         recovered = False
-        if 'translated_srt' not in res_json:
+        if 'translated_srt' not in res_json_legacy:
             # Fallback 1: Common hallucinated root keys
             possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
             for pk in possible_keys:
-                if pk in res_json and isinstance(res_json[pk], dict):
-                    res_json['translated_srt'] = res_json[pk]
+                if pk in res_json_legacy and isinstance(res_json_legacy[pk], dict):
+                    res_json_legacy['translated_srt'] = res_json_legacy[pk]
                     recovered = True
                     log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from hallucinated key: '{pk}'")
                     break
@@ -100,26 +114,58 @@ class TranslationEngine:
             if not recovered:
                 # Fallback 2: Check if any internal dictionary happens to use numeric string keys 
                 # (which would correspond to specific subtitle indices)
-                for key, value in res_json.items():
+                for key, value in res_json_legacy.items():
                     if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
-                        res_json['translated_srt'] = value
+                        res_json_legacy['translated_srt'] = value
                         recovered = True
                         log(self.log_queue, session_log_file, f"   ↳ 💡 Recovered schema from inferred dictionary: '{key}'")
                         break
             
             if not recovered:
                 # Fallback 3: The LLM flat-dumped the indices into the root instead of nesting them
-                if any(str(k).isdigit() for k in res_json.keys()):
-                    res_json = {'translated_srt': res_json}
+                if any(str(k).isdigit() for k in res_json_legacy.keys()):
+                    res_json_legacy = {'translated_srt': res_json_legacy}
                     recovered = True
                     log(self.log_queue, session_log_file, "   ↳ 💡 Recovered schema from root-level flat dictionary")
 
+        if 'translated_srt' not in res_json_legacy or not isinstance(res_json_legacy['translated_srt'], dict):
+            raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json_legacy.keys())}")
+
+        legacy_res = res_json_legacy['translated_srt']
+
+        from core.translation.schema_recovery import recover_schema
+        stats_copy = copy.deepcopy(stats)
+        new_res = recover_schema(res_json_new, stats_copy, session_log_file, log_queue=self.log_queue)
+
+        if legacy_res != new_res:
+            err_msg = f"💥 Schema Recovery Delta mismatch! Legacy: {legacy_res}, Extracted: {new_res}"
+            log(self.log_queue, None, err_msg)
+            raise RuntimeError(err_msg)
+
+        # Apply mutation to real in-place objects after validation succeeds
+        if 'translated_srt' not in res_json:
+            recovered = False
+            possible_keys = ["translation", "translations", "translated", "result", "output", "data"]
+            for pk in possible_keys:
+                if pk in res_json and isinstance(res_json[pk], dict):
+                    res_json['translated_srt'] = res_json[pk]
+                    recovered = True
+                    break
+            
+            if not recovered:
+                for key, value in res_json.items():
+                    if isinstance(value, dict) and any(str(k).isdigit() for k in value.keys()):
+                        res_json['translated_srt'] = value
+                        recovered = True
+                        break
+            
+            if not recovered:
+                if any(str(k).isdigit() for k in res_json.keys()):
+                    res_json = {'translated_srt': res_json}
+                    recovered = True
+
             if recovered:
                 stats["schema_recoveries"] += 1
-
-        # If it's still missing, we trigger an explicit schema collapse which forces a retry loop
-        if 'translated_srt' not in res_json or not isinstance(res_json['translated_srt'], dict):
-            raise ValueError(f"Schema collapse: 'translated_srt' missing. Found: {list(res_json.keys())}")
 
         return res_json['translated_srt']
 
