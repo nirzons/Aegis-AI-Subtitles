@@ -24,6 +24,8 @@ The engine room of Aegis, containing the primary translation and auditing logic.
 - **`translation_engine.py`**: A clean facade forwarding execution directly to the extracted pipeline.
 - **`core/translation/` package**: Isolated single-responsibility submodules containing core execution stages:
   - **`pipeline.py`**: Manages the main translation orchestration loop, batching, and async threads.
+  - **`context_resolver.py`**: Handles preliminary file extraction, SysPrm overrides, word-ratio calculations, and initial context resolution.
+  - **`response_processor.py`**: Normalizes model outputs via JSON pre-repairs, schema recovery fallbacks, and italic/line-alignment tags passthrough.
   - **`cost_calculator.py`**: Calculates token financial costs and model caching percentages.
   - **`schema_recovery.py`**: Reconstructs outputs when LLMs hallucinate JSON keys.
   - **`prompt_builder.py`**: Aggregates metadata, character context, and past dialogues into prompts.
