@@ -115,7 +115,7 @@ def start_web_server(shared_state: SharedState, host="0.0.0.0", port=None, log_q
         
         app = create_app(shared_state, log_queue=log_queue)
         # log_config=None prevents the 'Unable to configure formatter default' crash in pyw environments
-        config = uvicorn.Config(app, host=host, port=port, log_config=None, loop="asyncio")
+        config = uvicorn.Config(app, host=host, port=port, log_config=None, loop="asyncio", ws_ping_interval=None, ws_ping_timeout=None)
         server = NoSignalServer(config)
         
         if log_queue:
