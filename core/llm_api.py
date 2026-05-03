@@ -103,175 +103,24 @@ def ping_model(model_cfg):
 from core.llm.schemas import generate_batch_schema, generate_judge_schema
 
 
+from core.llm.providers.google import call_google
+from core.llm.providers.openai import call_openai
+from core.llm.providers.deepseek import call_deepseek
+from core.llm.providers.lmstudio import call_lmstudio
+
 def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False, response_format=None, profile=None):
+    provider = model_cfg.get('provider')
+    if provider == 'google':
+        return call_google(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
+    elif provider == 'openai':
+        return call_openai(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
+    elif provider == 'deepseek':
+        return call_deepseek(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
+    elif provider == 'lmstudio':
+        return call_lmstudio(model_cfg, system_prompt, user_prompt, api_key, indices_list, is_judge, response_format, profile)
+    else:
+        raise ValueError(f"Unknown or unsupported provider: {provider}")
 
-    current_temp = model_cfg.get('temperature', 0.15)
-    
-    if model_cfg['provider'] == 'google':
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=model_cfg['name'],
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=current_temp,
-                response_mime_type="application/json" 
-            ),
-            contents=[user_prompt]
-        )
-        text = response.text
-        text = _strip_markdown_fences(text)
-        return text.strip(), response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count, 0, 0
-
-    
-    elif model_cfg['provider'] == 'openai':
-        client = OpenAI(api_key=api_key)
-        current_temp = model_cfg.get('temperature', 0.0)
-        is_gpt5 = "gpt-5" in model_cfg['name'].lower()
-        
-        # GPT-5 / o1 reasoning models optimization: 
-        # Use the 'developer' role which is the new standard for o1 models.
-        # This provides the best of both worlds: high-reasoning obedience and perfect caching.
-        if is_gpt5:
-            req_params = {
-                "model": model_cfg['name'],
-                "messages": [
-                    {"role": "developer", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-                # temperature is omitted as GPT-5/o1 usually only support the default (1.0)
-            }
-        else:
-            req_params = {
-                "model": model_cfg['name'],
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": current_temp
-            }
-            
-            # OpenAI Structured Outputs (Strict Mode) check:
-            # Requires gpt-4o, gpt-4o-mini, or o1 (if not using developer role)
-            # OR LM Studio (which supports it in latest versions)
-            supports_structured = _supports_structured_output(model_cfg)
-
-            
-            if response_format is not None:
-                req_params["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "audit_output" if is_judge else "translation_output",
-                        "strict": True,
-                        "schema": response_format
-                    }
-                }
-            elif indices_list and supports_structured:
-                use_scratch = model_cfg.get('enable_scratchpad', True)
-                schema = generate_judge_schema(indices_list, profile=profile) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch, profile=profile)
-                req_params["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "audit_output" if is_judge else "translation_output",
-                        "strict": True,
-                        "schema": schema
-                    }
-                }
-
-            else:
-                req_params["response_format"] = {"type": "json_object"}
-            
-        response = client.chat.completions.create(**req_params)
-
-        
-        raw_content = response.choices[0].message.content
-        # Strip markdown if model added it
-        raw_content = _strip_markdown_fences(raw_content)
-
-
-        # Robust extraction for OpenAI/GPT-5 caching & reasoning
-        cached_tokens = 0
-        reasoning_tokens = 0
-        usage = getattr(response, 'usage', None)
-        if usage:
-            # 1. Prompt Caching
-            p_details = getattr(usage, 'prompt_tokens_details', None)
-            if p_details:
-                cached_tokens = getattr(p_details, 'cached_tokens', 0) or 0
-            
-            # 2. Reasoning (Brain Load)
-            c_details = getattr(usage, 'completion_tokens_details', None)
-            if c_details:
-                reasoning_tokens = getattr(c_details, 'reasoning_tokens', 0) or 0
-        
-        return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens, reasoning_tokens
-
-    elif model_cfg['provider'] == 'deepseek':
-        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-        response = client.chat.completions.create(
-            model=model_cfg['name'],
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=current_temp,
-            response_format={"type": "json_object"}
-        )
-        usage_dict = response.usage.model_dump() if hasattr(response.usage, 'model_dump') else vars(response.usage)
-        cached_tokens = usage_dict.get('prompt_cache_hit_tokens', 0)
-        
-        # New robust details extraction for DeepSeek
-        reasoning_tokens = 0
-        if getattr(response.usage, 'prompt_tokens_details', None):
-            cached_tokens = getattr(response.usage.prompt_tokens_details, 'cached_tokens', 0) or 0
-        if getattr(response.usage, 'completion_tokens_details', None):
-            reasoning_tokens = getattr(response.usage.completion_tokens_details, 'reasoning_tokens', 0) or 0
-            
-        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens, reasoning_tokens
-    
-    elif model_cfg['provider'] == 'lmstudio':
-        client = OpenAI(api_key=api_key, base_url="http://localhost:1234/v1", timeout=2700.0, max_retries=0)
-        
-        # Check for Structured Output support
-        if response_format is not None or indices_list:
-            # Prepare the call parameters
-            req_params = {
-                "model": model_cfg['name'],
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": current_temp
-            }
-            
-            # Use 'json_schema' (Strict Mode) for OpenAI high-end models AND LM Studio models.
-            if _supports_structured_output(model_cfg):
-                if response_format is not None:
-                    schema = response_format
-                else:
-                    use_scratch = model_cfg.get('enable_scratchpad', True)
-                    schema = generate_judge_schema(indices_list, profile=profile) if is_judge else generate_batch_schema(indices_list, use_scratchpad=use_scratch, profile=profile)
-                    
-                req_params["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "audit_output" if is_judge else "translation_output",
-                        "strict": True,
-                        "schema": schema
-                    }
-                }
-            
-            # Call the LLM (response_format is included if supported/requested above)
-            response = client.chat.completions.create(**req_params)
-
-            
-            # Extract content with fallback for 'reasoning_content' (critical for DictaLM-Thinking)
-            message = response.choices[0].message
-            raw_content = getattr(message, 'content', "") or ""
-            if not raw_content or not raw_content.strip():
-                # Check for reasoning_content if standard content is empty
-                raw_content = getattr(message, 'reasoning_content', "") or ""
-            
-            return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
 
 
 
