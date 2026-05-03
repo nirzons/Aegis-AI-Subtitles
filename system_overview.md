@@ -30,6 +30,8 @@ The engine room of Aegis, containing the primary translation and auditing logic.
   - **`schema_recovery.py`**: Reconstructs outputs when LLMs hallucinate JSON keys.
   - **`prompt_builder.py`**: Aggregates metadata, character context, and past dialogues into prompts.
   - **`text_cleaner.py`**: Preprocesses inputs, stripping inline italic formats and screen alignment tags.
+  - **`batch_state.py`**: Encapsulates mutable loop variables and batch adjustment triggers for processing chunks.
+  - **`pipeline_helpers.py`**: Helper functions for dynamic batch sizing, loop success/failure evaluations, and history backfill.
 - **`audit_manager.py`**: Orchestrates the multi-tier validation pipeline, including heuristic checks and coordination with the AI Judge.
 - **`llm_api.py`**: A unified abstraction layer for multiple providers (Gemini, OpenAI, DeepSeek, and local LM Studio) with support for structured outputs and reasoning tokens.
 - **`text_processing.py`**: Handles low-level text manipulations, RTL fixes, JSON pre-repair, and heuristic "Shield" checks.
