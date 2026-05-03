@@ -374,7 +374,17 @@ class TranslationEngine:
             system_prompt_parts.append(sys_inst.strip())
             system_prompt_parts.append(tech_rules.strip())
             
-            system_prompt = "\n\n".join(system_prompt_parts) + "\n"
+            legacy_sys = "\n\n".join(system_prompt_parts) + "\n"
+
+            from core.translation.prompt_builder import build_system_prompt
+            new_sys = build_system_prompt(profile, model_cfg, idx_workflow, idx_tech, idx_clean, prompt_prefix, series_context)
+
+            if legacy_sys != new_sys:
+                err_msg = "💥 System Prompt building Delta mismatch!"
+                log(self.log_queue, None, err_msg)
+                raise RuntimeError(err_msg)
+
+            system_prompt = legacy_sys
             
             # Efficiency/Quality logging
             log(self.log_queue, session_log_file, f"🚀 [Mode: {'High-Quality (Scratchpad)' if use_scratchpad else 'Efficiency (Direct)'}] Starting translation with {model_cfg['name']}...")
@@ -608,6 +618,14 @@ class TranslationEngine:
                                 # Case 3: Mixed text or complex tags - leave current_txt (which might have had align stripped)
                                 final_input_payload[idx] = current_txt
                                 
+                        from core.translation.text_cleaner import clean_and_strip_tags
+                        new_final_input, new_italic_indices, new_alignment_map = clean_and_strip_tags(input_payload, profile)
+
+                        if final_input_payload != new_final_input or batch_italic_indices != new_italic_indices or batch_alignment_map != new_alignment_map:
+                            err_msg = "💥 Text Cleaner Delta mismatch!"
+                            log(self.log_queue, None, err_msg)
+                            raise RuntimeError(err_msg)
+                                
                         if batch_italic_indices and getattr(self, 'debug_mode', False):
                             log(self.log_queue, session_log_file, f"✨ [Italic Passthrough] Stripped outer italics for indices: {', '.join(sorted(batch_italic_indices))}")
 
@@ -741,6 +759,18 @@ class TranslationEngine:
                             
                             feedback_injection += "----------------------------------------\n"
                         final_prompt = user_prompt + feedback_injection
+
+                        from core.translation.prompt_builder import build_user_prompt
+                        new_user_prompt = build_user_prompt(
+                            profile, model_cfg, context_state, expected_count, indices, 
+                            text_chunk, input_payload, use_scratchpad, warning_section, 
+                            tag_rule, last_judge_error, last_judged_indices
+                        )
+
+                        if final_prompt != new_user_prompt:
+                            err_msg = "💥 User Prompt building Delta mismatch!"
+                            log(self.log_queue, None, err_msg)
+                            raise RuntimeError(err_msg)
 
                         raw_res = None
                         _batch_system_prompt = system_prompt
