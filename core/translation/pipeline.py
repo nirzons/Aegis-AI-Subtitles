@@ -108,168 +108,25 @@ def run_pipeline(self, config):
         if resume_mode:
             log(self.log_queue, session_log_file, f"🔄 Resuming from index: {current_index}")
 
-        with open(sys_file, 'r', encoding='utf-8-sig') as f:
-            lines = f.readlines()
-        clean_lines = [line for line in lines if not line.strip().startswith("//")]
-        raw_sysprm = "".join(clean_lines).strip()
-        
-        # ── Ratio Resolution & Logging ──
-        ratios = list(profile.get_ratios(profile.source_lang_code))
-        ratios_source = "Defaults"
-        
-        try:
-            sysprm_json = json.loads(raw_sysprm)
-            
-            # 1. Parse Language Overrides (Tier 0)
-            if "language" not in sysprm_json or "use_native_instructions" not in sysprm_json["language"]:
-                log(self.log_queue, session_log_file, "❌ Error: SysPrm must be a JSON file and contain 'language': {'use_native_instructions': true/false}. Legacy files are not supported.")
-                self.ui_queue.put(("finished", None))
-                return
-
-            lang_cfg = sysprm_json["language"]
-            if "source" in lang_cfg: profile.source_lang_code = lang_cfg["source"]
-            if "target" in lang_cfg: profile.target_lang_code = lang_cfg["target"]
-            profile.use_native_instructions = bool(lang_cfg["use_native_instructions"])
-            mode_str = "Native" if profile.use_native_instructions else "English"
-            log(self.log_queue, session_log_file, f"🌐 Mode: {mode_str} Instructions")
-            
-            if "max_words_per_line" in lang_cfg:
-                profile.max_words_per_line = int(lang_cfg["max_words_per_line"])
-            
-            # Ratio Overrides
-            sysprm_overrode = False
-            if "min_block_ratio" in lang_cfg:
-                ratios[0] = float(lang_cfg["min_block_ratio"])
-                sysprm_overrode = True
-            if "max_block_ratio" in lang_cfg: 
-                ratios[1] = float(lang_cfg["max_block_ratio"])
-                sysprm_overrode = True
-            if "batch_min_ratio" in lang_cfg: 
-                ratios[2] = float(lang_cfg["batch_min_ratio"])
-                sysprm_overrode = True
-            if "batch_max_ratio" in lang_cfg: 
-                ratios[3] = float(lang_cfg["batch_max_ratio"])
-                sysprm_overrode = True
-            
-            if sysprm_overrode:
-                ratios_source = "SysPrm Override"
-                if not profile.direct_pair_ratios: profile.direct_pair_ratios = {}
-                profile.direct_pair_ratios[profile.source_lang_code] = tuple(ratios)
-
-            log(self.log_queue, session_log_file, 
-                f"📊 Word Ratios ({ratios_source}): MinBlock={ratios[0]}, MaxBlock={ratios[1]}, MinBatch={ratios[2]}, MaxBatch={ratios[3]}")
-
-            # 2. Parse Series Context
-            if "series_context" in sysprm_json:
-                sc = sysprm_json["series_context"]
-                series_context = "\n".join(sc) if isinstance(sc, list) else str(sc)
-            elif "series_context_lines" in sysprm_json: # Legacy support for early JSON format
-                series_context = "\n".join(sysprm_json["series_context_lines"])
-            else:
-                series_context = ""
-
-            # 3. Parse Prompt Prefix (Legacy JSON)
-            prompt_prefix = sysprm_json.get("prompt_prefix", "")
-
-            # 4. Extract Bookkeeping / Initial Context
-            # Everything not 'language' or 'series_context' is initial context
-            initial_context_dict = {
-                k: v for k, v in sysprm_json.items() 
-                if k not in ["language", "series_context", "series_context_lines", "prompt_prefix"]
-            }
-            initial_context_str = json.dumps(initial_context_dict, ensure_ascii=False)
-
-        except json.JSONDecodeError:
-            log(self.log_queue, session_log_file, "❌ Error: SysPrm is not a valid JSON file. Legacy markdown profiles are not supported.")
-            self.ui_queue.put(("finished", None))
-            return
-
-        if not resume_mode: log(self.log_queue, session_log_file, "✅ Loaded project-specific context from sysprm.")
-
-        # Calculate dynamic serial indexes based on the project sysprm context
-        last_idx = 0
-        illegal_labels = [] # List of names that should be purged if found with colons
-        if series_context:
-            matches = RE_SYS_IDX.findall(series_context)
-            if matches:
-                last_idx = max([int(m) for m in matches])
-            
-            # Extract potential speaker names from the gender tracking lists for the auditor
-            # Searches for words in parentheses or capitalize English names
-            name_matches = self.re_name_labels.findall(series_context)
-            for nm in name_matches:
-                clean_nm = nm.strip("()")
-                if len(clean_nm) > 2 and clean_nm not in illegal_labels:
-                    illegal_labels.append(clean_nm)
-            # Add common technical labels
-            if "Jeff" not in illegal_labels: illegal_labels.append("Jeff")
-            if "Probst" not in illegal_labels: illegal_labels.append("Probst")
-        
-        self.illegal_labels = illegal_labels # Store as instance variable
+        from core.translation.context_resolver import resolve_initial_context
+        (profile, series_context, initial_context_str, context_state,
+         last_idx, illegal_labels, srt_content, ordered_srt_indices, prompt_prefix) = resolve_initial_context(config, self.log_queue, session_log_file)
+         
+        self.illegal_labels = illegal_labels
         idx_workflow = last_idx + 1
         idx_tech = idx_workflow + 1
         idx_clean = idx_tech + 1
-        
-        # Modular System Instruction Assembly
+
         use_scratchpad = model_cfg.get("enable_scratchpad", True)
         
-        workflow_steps = get_workflow_step_templates(profile, use_scratchpad)
-        formatted_steps = []
-        for i, step_text in enumerate(workflow_steps, 1):
-            formatted_steps.append(step_text.replace("{n}", str(i)))
-            
-        # Default to English header
-        sys_inst_header = STEP_HEADER_EN.replace("[IDX_WORKFLOW]", str(idx_workflow))
-        
-        # Check if profile provides its own header for native instructions
-        if profile.use_native_instructions and profile.native_workflow_steps and 'header' in profile.native_workflow_steps:
-            sys_inst_header = profile.native_workflow_steps['header'].replace("[IDX_WORKFLOW]", str(idx_workflow))
-
-        sys_inst = sys_inst_header + "\n" + "\n".join(formatted_steps)
-        
-        tech_rules = build_technical_rules(profile)
-        tech_rules = tech_rules.replace("[IDX_TECH]", str(idx_tech)).replace("[IDX_CLEAN]", str(idx_clean))
-
         from core.translation.prompt_builder import build_system_prompt
         system_prompt = build_system_prompt(profile, model_cfg, idx_workflow, idx_tech, idx_clean, prompt_prefix, series_context)
 
-        
-        # Efficiency/Quality logging
         log(self.log_queue, session_log_file, f"🚀 [Mode: {'High-Quality (Scratchpad)' if use_scratchpad else 'Efficiency (Direct)'}] Starting translation with {model_cfg['name']}...")
 
-            
-        if not resume_mode:
-            try:
-                context_state = json.loads(initial_context_str) if initial_context_str != "{}" else {}
-                if not context_state:
-                     context_state = {
-                        "last_two_lines_target": [], "last_speaker_info": profile.default_unknown_speaker, 
-                        "speakers_gender": {} if profile.gender_tracking else {}, "current_setting": profile.default_setting_label, "summary": profile.default_opening_summary
-                     }
-            except json.JSONDecodeError:
-                log(self.log_queue, session_log_file, "⚠️ Warning: Could not parse initial JSON. Falling back to default.")
-                context_state = {
-                    "last_two_lines_target": [], "last_speaker_info": profile.default_unknown_speaker, 
-                    "speakers_gender": {} if profile.gender_tracking else {}, "current_setting": profile.default_setting_label, "summary": profile.default_opening_summary
-                }
-
-        with open(srt_file, 'r', encoding='utf-8-sig') as f:
-            srt_content = f.read()
-
-        # --- Sanity Check ---
-        from utils.app_utils import validate_srt_file
-        is_valid, srt_errors = validate_srt_file(srt_file)
-        if not is_valid:
-            log(self.log_queue, session_log_file, "❌ FATAL: Source SRT file failed sanity check!")
-            for err in srt_errors:
-                log(self.log_queue, session_log_file, f"  ! {err}")
-            log(self.log_queue, session_log_file, "🛑 Translation aborted. Please fix the SRT file errors listed above.")
-            self.ui_queue.put(("finished", None))
-            return
-        # --------------------
-
-        blocks, eng_by_index, ordered_srt_indices = parse_srt_blocks(srt_content)
+        blocks, eng_by_index, _ = parse_srt_blocks(srt_content)
         total_blocks = len(blocks)
+
 
 
         if resume_mode:
@@ -637,88 +494,15 @@ def run_pipeline(self, config):
                         # --- Calculate Velocity for Telemetry ---
                         pipeline_velocity = batch_load / _call_duration if _call_duration > 0 else 0
 
-                        cleaned_res = pre_repair_json(raw_res)
-                        try:
-                            res_json = json.loads(cleaned_res)
-                        except json.JSONDecodeError:
-                            _inc_by_size(stats["json_parse_errors"], current_batch_size)
-                            raise
+                        from core.translation.response_processor import process_llm_response
+                        received_dict, res_json = process_llm_response(
+                            raw_res, input_payload, batch_italic_indices, 
+                            batch_alignment_map, profile, stats, 
+                            session_log_file, indices, current_batch_size, 
+                            debug_mode=getattr(self, 'debug_mode', False), log_queue=self.log_queue
+                        )
 
-                        # Auditor Warning for Placeholder Copy-Pasting
-                        has_placeholder = False
-                        if profile.use_native_instructions and profile.native_placeholder_indicators:
-                            for indicator in profile.native_placeholder_indicators:
-                                if indicator in cleaned_res:
-                                    has_placeholder = True
-                                    break
-                        elif "<insert" in cleaned_res or "<brief summary" in cleaned_res:
-                            has_placeholder = True
 
-                        if has_placeholder:
-                            log(self.log_queue, session_log_file, "⚠️ AUDITOR WARNING: The LLM responded with identical placeholder text from the prompt template!")
-
-                        # Schema Recovery Layer: Handle GPT-5 key hallucinations
-                        received_dict = self._recover_schema(res_json, stats, session_log_file)
-
-                        # --- Italic Passthrough: Authoritative Enforcement ---
-                        # We ensure italics exist ONLY where they existed in the source.
-                        it_restored = 0
-                        it_stripped = 0
-                        for idx in indices:
-                            if idx not in received_dict: continue
-                            target_text = str(received_dict[idx]).strip()
-                            
-                            # Case A: Should have italics
-                            if idx in batch_italic_indices:
-                                if target_text and not (target_text.startswith('<i>') and target_text.endswith('</i>')):
-                                    received_dict[idx] = f"<i>{target_text}</i>"
-                                    it_restored += 1
-                            
-                            # Case B: Should NOT have italics (Hallucination removal)
-                            else:
-                                source_text = str(input_payload.get(idx, ""))
-                                if "<i>" not in source_text:
-                                    match = re.match(r"^<i>(.*)</i>$", target_text, re.DOTALL)
-                                    if match:
-                                        received_dict[idx] = match.group(1).strip()
-                                        it_stripped += 1
-
-                        if (it_restored > 0 or it_stripped > 0) and getattr(self, 'debug_mode', False):
-                            log_msg = f"✨ [Italic Passthrough] Enforcement: Restored {it_restored} | Stripped hallucinated {it_stripped}"
-                            log(self.log_queue, session_log_file, log_msg)
-
-                        # --- Alignment Passthrough: Restoration ---
-                        al_restored = 0
-                        for idx in indices:
-                            if idx in batch_alignment_map:
-                                target_text = received_dict[idx]
-                                # If the translation is empty (LLM removed SDH/etc), don't restore tags
-                                if not target_text.strip():
-                                    continue
-
-                                subtitle_aligns = batch_alignment_map[idx]
-                                h_lines = target_text.split('\n')
-                                
-                                # Case A: Line count matches perfectly
-                                if len(h_lines) >= max(subtitle_aligns.keys()) + 1:
-                                    for line_idx, pos in subtitle_aligns.items():
-                                        # We ensure the standard {\anX} format with a backslash.
-                                        # Using a raw string to prevent \a from being interpreted as a BELL character.
-                                        h_lines[line_idx] = rf"{{\an{pos}}}{h_lines[line_idx]}"
-                                        al_restored += 1
-                                    received_dict[idx] = '\n'.join(h_lines)
-                                
-                                # Case B: Line count mismatch (e.g. LLM merged lines)
-                                # Prepend unique alignment tags to the first line
-                                else:
-                                    unique_pos = sorted(list(set(subtitle_aligns.values())))
-                                    # Standardize to {\anX} using raw string
-                                    tags = "".join([rf"{{\an{p}}}" for p in unique_pos])
-                                    received_dict[idx] = f"{tags}{target_text}"
-                                    al_restored += len(unique_pos)
-                        
-                        if al_restored > 0 and getattr(self, 'debug_mode', False):
-                            log(self.log_queue, session_log_file, f"✨ [Alignment Passthrough] Restored {{\\anX}} for {al_restored} lines.")
 
                         # --- Auditing & Judging Pipeline ---
                         # Inject illegal_labels into config so audit_manager can access it.
