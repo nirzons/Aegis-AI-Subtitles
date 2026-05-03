@@ -10,6 +10,8 @@ from google.genai import types
 from openai import OpenAI
 
 from core.text_processing import pre_repair_json
+from core.llm._utils import _strip_markdown_fences, _supports_structured_output
+
 
 
 def is_process_alive(pid):
@@ -214,11 +216,9 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
             contents=[user_prompt]
         )
         text = response.text
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-        return text.strip(), response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count, 0
+        text = _strip_markdown_fences(text)
+        return text.strip(), response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count, 0, 0
+
     
     elif model_cfg['provider'] == 'openai':
         client = OpenAI(api_key=api_key)
@@ -250,9 +250,8 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
             # OpenAI Structured Outputs (Strict Mode) check:
             # Requires gpt-4o, gpt-4o-mini, or o1 (if not using developer role)
             # OR LM Studio (which supports it in latest versions)
-            supports_structured = (model_cfg['provider'] == 'openai' and 
-                                 any(m in model_cfg['name'].lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or \
-                                 (model_cfg['provider'] == 'lmstudio')
+            supports_structured = _supports_structured_output(model_cfg)
+
             
             if response_format is not None:
                 req_params["response_format"] = {
@@ -283,10 +282,8 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
         
         raw_content = response.choices[0].message.content
         # Strip markdown if model added it
-        if "```json" in raw_content:
-            raw_content = raw_content.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw_content:
-            raw_content = raw_content.split("```")[1].split("```")[0].strip()
+        raw_content = _strip_markdown_fences(raw_content)
+
 
         # Robust extraction for OpenAI/GPT-5 caching & reasoning
         cached_tokens = 0
@@ -344,7 +341,7 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
             }
             
             # Use 'json_schema' (Strict Mode) for OpenAI high-end models AND LM Studio models.
-            if (model_cfg['provider'] == 'openai' and any(m in model_cfg['name'].lower() for m in ["gpt-4o", "gpt-4o-mini", "o1"])) or model_cfg['provider'] == 'lmstudio':
+            if _supports_structured_output(model_cfg):
                 if response_format is not None:
                     schema = response_format
                 else:
@@ -373,25 +370,6 @@ def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, 
             
             return raw_content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
 
-
-            # Fallback to old manual prompt style for non-batch calls if any
-            final_llm_input = (
-                "### Guidelines and Rules ###\n"
-                f"{system_prompt}\n\n"
-                "### Translation Task and Data ###\n"
-                "You are now translating the following batch. Remember: the output must be in the target language only.\n"
-                f"{user_prompt}\n\n"
-                "### Final Answer ###\n"
-                "Answer now in JSON format, where the target fields are translated only to the target language:"
-            )    
-            response = client.chat.completions.create(
-                model=model_cfg['name'],
-                messages=[{"role": "user", "content": final_llm_input}],
-                temperature=current_temp,
-                max_tokens=6144,
-                response_format={"type": "text"}
-            )
-            return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0
 
 
 
