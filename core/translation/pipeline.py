@@ -4,30 +4,14 @@ import datetime
 import json
 import re
 import sys
-import importlib
-import subprocess
-import queue
 
-from utils.srt_manager import (
-    RE_ITALIC_S, RE_ITALIC_D, RE_ALIGNMENT, 
-    parse_srt_blocks, get_upcoming_cues, extract_chunk_metadata,
-    strip_srt, load_srt_index_to_text, load_srt_full_history, validate_srt_file
-)
-import threading
-from core.constants import (
-    get_json_schema, get_workflow_step_templates, build_technical_rules, 
-    STEP_HEADER_EN, get_user_prompt_prefix, get_special_instructions_header,
-    get_technical_rules_header, get_exact_count_rule,
-    get_exact_indices_rule, get_do_not_translate_rule, get_tag_rule
-)
-from core.text_processing import fix_rtl, pre_repair_json, check_heuristics, strip_music_glyphs_batch, force_split_overlong_line, cleanup_failed_translation
-from core.llm_api import call_llm, call_llm_judge, generate_batch_schema
+from utils.srt_manager import get_upcoming_cues
+from core.text_processing import pre_repair_json
+from core.llm_api import call_llm, generate_batch_schema
+from core.translation.intervention_handler import execute_manual_intervention_or_bypass
 from utils.app_utils import log, file_log, format_cost_display, get_eta_string, pretty_json
-from core.translation_stats import _inc_by_size, make_stats, print_stats
-from core.session_manager import (
-    get_next_checkpoint_file, resolve_checkpoint_paths, save_checkpoint,
-    cleanup_checkpoint, build_checkpoint_payload, restore_profile_from_checkpoint
-)
+from core.translation_stats import print_stats
+from core.session_manager import save_checkpoint, cleanup_checkpoint, build_checkpoint_payload
 from core.audit_manager import run_audit_pipeline
 
 RE_SDH_PUNCT = re.compile(r"[-.\s]*[\[(].*?[\])][-.\s]*")
@@ -304,105 +288,26 @@ def run_pipeline(self, config):
                         
                         evaluate_batch_failure(state, self.log_queue, session_log_file, stats)
                         if state.min_batch_failures >= 3:
-                            log(self.log_queue, session_log_file, "❌ Persistent failure at minimal batch size. Triggering intervention...")
-                            stats["total_interventions"] = stats.get("total_interventions", 0) + 1
-                            self.ui_queue.put(("intervention_count", stats["total_interventions"]))
-
-                            eng_src_for_intervention = []
-                            for idx in indices:
-                                eng_src_for_intervention.append({
-                                    "index": idx,
-                                    "timestamp": next(m['timestamp'] for m in original_metadata if m['index'] == idx),
-                                    "text": eng_by_index[idx]
-                                })
-                                
-                            reason_for_human = native_audit_reason if native_audit_reason else "System Error (AI succeeded but Engine crashed)"
-                            if "pipeline_velocity" in str(e):
-                                reason_for_human += " [Internal Bug: 'pipeline_velocity' missing]"
-                            else:
-                                reason_for_human += f" [System Error: {str(e)}]"
-
-                            if getattr(self, 'bypass_intervention', False):
-                                log(self.log_queue, session_log_file, f"🚫 [BYPASS] Skipping manual intervention. Auto-cleaning {len(indices)} subtitle(s)...")
-
-                                bypass_dict = {}
-                                last_received = received_dict if 'received_dict' in locals() else {}
-                                for m in eng_src_for_intervention:
-                                    raw_target = str(last_received.get(m['index'], ""))
-                                    cleaned = cleanup_failed_translation(raw_target, m['text'], reason_for_human, profile=profile)
-                                    bypass_dict[m['index']] = cleaned
-                                    log(self.log_queue, session_log_file, f"   🚫 IDX {m['index']}: {repr(raw_target)[:60]} → {repr(cleaned)[:60]}")
-
-                                if bypass_log_file is None:
-                                    bypass_log_file = self._create_bypass_log(session_log_file)
-                                self._write_bypass_entry(bypass_log_file, eng_src_for_intervention, bypass_dict, reason_for_human)
-                                bypass_count += 1
-
-                                received_dict = bypass_dict
-                                res_json = {
-                                    "translated_srt": bypass_dict,
-                                    "summary": context_state.get('summary'),
-                                    "last_speaker_info": context_state.get('last_speaker_info'),
-                                    "continuity_note": context_state.get('continuity_note')
-                                }
-
-                                log(self.log_queue, session_log_file, f"🚫 [BYPASS] Auto-cleanup complete for batch {batch_label}. Resuming...")
-
-                                self._finalize_batch_success(
-                                    original_metadata, received_dict, f_out,
-                                    translated_target_by_index, res_json, context_state,
-                                    stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
-                                )
-
-                                state.min_batch_failures = 0
-                                state.failures_at_current_size = 0
-                                state.batch_success = True
-                                success_streak = state.success_streak
-                                break
-
-                            intervention_start_t = time.time()
-                            manual_fix_dict = self._perform_manual_intervention(
-                                indices, 
-                                eng_src_for_intervention, 
-                                received_dict if 'received_dict' in locals() else {}, 
-                                reason_for_human,
-                                config.get("scratch_dir", "scratch"),
-                                profile=profile
+                            result = execute_manual_intervention_or_bypass(
+                                self, state, indices, expected_count, original_metadata, eng_by_index,
+                                native_audit_reason, e, received_dict if 'received_dict' in locals() else None,
+                                bypass_count, bypass_log_file, context_state, translated_target_by_index,
+                                stats, session_log_file, f_out, pipeline_load, pipeline_start_time,
+                                profile, config, self.log_queue, self.ui_queue, session_start_time
                             )
-                            intervention_duration = time.time() - intervention_start_t
-                            session_start_time += intervention_duration
-                            
-                            if manual_fix_dict:
-                                received_dict = manual_fix_dict
-                                res_json = {
-                                    "translated_srt": manual_fix_dict,
-                                    "summary": context_state.get('summary'),
-                                    "last_speaker_info": context_state.get('last_speaker_info'),
-                                    "continuity_note": context_state.get('continuity_note')
-                                }
-                                
-                                log(self.log_queue, session_log_file, "✅ Manual Intervention successful. Resuming automated flow...")
-                                file_log(session_log_file, f"--- MANUAL INTERVENTION AUDIT (Batch {indices[0]}-{indices[-1]}) ---")
-                                for m in eng_src_for_intervention:
-                                    idx = m['index']
-                                    file_log(session_log_file, f"IDX {idx} | EN: {m['text']}")
-                                    file_log(session_log_file, f"IDX {idx} | HE (HUMAN): {manual_fix_dict.get(idx, 'MISSING')}")
-                                file_log(session_log_file, "--------------------------------------------------------")
-                                
-                                self._finalize_batch_success(
-                                    original_metadata, received_dict, f_out, 
-                                    translated_target_by_index, res_json, context_state, 
-                                    stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
-                                )
-
-                                state.min_batch_failures = 0
-                                state.failures_at_current_size = 0
-                                state.batch_success = True
-                                success_streak = state.success_streak
-                                break 
-                            else:
-                                log(self.log_queue, session_log_file, "❌ Manual Intervention cancelled or failed. Stopping.")
+                            if result.should_stop:
                                 self.should_stop = True
+                                break
+                            if result.batch_success:
+                                for k, v in result.state_updates.items():
+                                    if k == "bypass_log_file":
+                                        bypass_log_file = v
+                                    elif k == "bypass_count":
+                                        bypass_count = v
+                                    elif k == "session_start_time":
+                                        session_start_time = v
+                                    elif k == "received_dict":
+                                        received_dict = v
                                 break
 
                 if state.batch_success:
