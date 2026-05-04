@@ -35,105 +35,55 @@ RE_SYS_IDX = re.compile(r'###\s*(\d+)\.')
 
 def run_pipeline(self, config):
     try:
-        resume_mode = config["resume_mode"]
-        self.debug_mode = config.get("debug_mode", False)
-        model_cfg = config["model_cfg"]
-        api_key = config["api_key"]
-        batch_size = config["batch_size"]
-        session_log_file = config["session_log_file"]
-        
-        profile = config.get("language_profile")
-        if not profile:
-            from utils.settings import SETTINGS
-            profile = SETTINGS.get_active_profile()
+        from core.translation.pipeline_initializer import initialize_pipeline_session, InitializationError
+        try:
+            cfg, state = initialize_pipeline_session(config, self.log_queue, self.ui_queue, self.shared_state)
+        except InitializationError as e:
+            log(self.log_queue, config.get("session_log_file"), f"❌ Initialization Error: {e}")
+            self.ui_queue.put(("finished", None))
+            return
+            
+        resume_mode = cfg.resume_mode
+        self.debug_mode = cfg.debug_mode
+        model_cfg = cfg.model_cfg
+        api_key = cfg.api_key
+        session_log_file = cfg.session_log_file
+        profile = cfg.profile
         self.profile = profile
         
-        ranges_str = "".join([f"\\u{s:04x}-\\u{e:04x}" for s, e in profile.target_unicode_ranges])
-        self.re_ghost_chars = re.compile(rf'\n[a-zA-Z]{{1,2}}(?=\s|[{ranges_str}]|<|♪)')
-        self.re_name_labels = re.compile(rf'([A-Z][a-z]+|\([{ranges_str}]+\))')
-        self.re_newline_cleanup = re.compile(profile.newline_regex)
+        self.re_ghost_chars = cfg.re_ghost_chars
+        self.re_name_labels = cfg.re_name_labels
+        self.re_newline_cleanup = cfg.re_newline_cleanup
+        self.illegal_labels = cfg.illegal_labels
+        self.current_output_file = cfg.output_file
+        output_file = cfg.output_file
+        srt_file = cfg.srt_file
+        sys_file = cfg.sys_file
+        current_checkpoint_file = cfg.current_checkpoint_file
         
-        checkpoint_dir = config["checkpoint_dir"]
-        sysprm_dir = config["sysprm_dir"]
-        english_subs_dir = config["english_subs_dir"]
-        output_dir = config["output_dir"]
-
-        if resume_mode:
-            checkpoint_data = config["checkpoint_data"]
-            sys_file, srt_file = resolve_checkpoint_paths(checkpoint_data, sysprm_dir, english_subs_dir)
-            output_file = checkpoint_data['output_file']
-            current_index = checkpoint_data['current_index']
-            processed = checkpoint_data.get('processed', 0)
-            total_main_cost = checkpoint_data.get('total_main_cost', checkpoint_data.get('total_cost', 0.0))
-            total_judge_cost = checkpoint_data.get('total_judge_cost', 0.0)
-            context_state = checkpoint_data['context_state']
-            
-            restore_profile_from_checkpoint(profile, checkpoint_data)
-            current_checkpoint_file = config["checkpoint_file_path"]
-            
-            if not os.path.exists(srt_file) or not os.path.exists(sys_file):
-                log(self.log_queue, session_log_file, "❌ Error: Original files missing. Cannot resume.")
-                self.ui_queue.put(("finished", None))
-                return
-
-            self.current_output_file = output_file
-            log(self.log_queue, session_log_file, f"\n✅ Resuming session: {srt_file} from block {current_index}")
-            log(self.log_queue, session_log_file, f"📁 Using Checkpoint File: {current_checkpoint_file}")
-        else:
-            sys_file = os.path.join(sysprm_dir, config["sys_name"])
-            srt_file = os.path.join(english_subs_dir, config["srt_name"])
-            current_checkpoint_file = get_next_checkpoint_file(checkpoint_dir)
-
-            base_name = os.path.basename(srt_file)
-            output_file = os.path.join(output_dir, base_name.replace('.srt', f'_{model_cfg["name"]}_{profile.target_lang_code}.srt'))
-            self.current_output_file = output_file
-            current_index = 0
-            processed = 0
-            total_main_cost = 0.0
-            total_judge_cost = 0.0
-            log(self.log_queue, session_log_file, f"\n📁 Creating new Checkpoint File: {current_checkpoint_file}")
-
-        bypass_log_file = None
-        bypass_count = 0
-
-        log(self.log_queue, session_log_file, f"📝 Target File: {os.path.basename(srt_file)}")
-        if resume_mode:
-            log(self.log_queue, session_log_file, f"🔄 Resuming from index: {current_index}")
-
-        from core.translation.context_resolver import resolve_initial_context
-        (profile, series_context, initial_context_str, context_state,
-         last_idx, illegal_labels, srt_content, ordered_srt_indices, prompt_prefix) = resolve_initial_context(config, self.log_queue, session_log_file)
-         
-        self.illegal_labels = illegal_labels
-        idx_workflow = last_idx + 1
-        idx_tech = idx_workflow + 1
-        idx_clean = idx_tech + 1
-
-        use_scratchpad = model_cfg.get("enable_scratchpad", True)
+        use_scratchpad = cfg.use_scratchpad
+        system_prompt = cfg.system_prompt
+        blocks = cfg.blocks
+        total_blocks = cfg.total_blocks
+        ordered_srt_indices = cfg.ordered_srt_indices
+        eng_by_index = cfg.eng_by_index
         
-        from core.translation.prompt_builder import build_system_prompt
-        system_prompt = build_system_prompt(profile, model_cfg, idx_workflow, idx_tech, idx_clean, prompt_prefix, series_context)
-
-        log(self.log_queue, session_log_file, f"🚀 [Mode: {'High-Quality (Scratchpad)' if use_scratchpad else 'Efficiency (Direct)'}] Starting translation with {model_cfg['name']}...")
-
-        blocks, eng_by_index, _ = parse_srt_blocks(srt_content)
-        total_blocks = len(blocks)
-
-        from core.translation.pipeline_helpers import backfill_history, determine_effective_batch_size
-        translated_target_by_index = backfill_history(
-            resume_mode, output_file, srt_content, ordered_srt_indices, 
-            current_index, eng_by_index, self.ui_queue, self.log_queue, session_log_file
-        )
-        effective_batch_size, override_msg = determine_effective_batch_size(resume_mode, checkpoint_data if resume_mode else {}, batch_size)
-
-        if resume_mode:
-            stats = make_stats(resume_from=checkpoint_data.get("stats"))
-        else:
-            stats = make_stats()
-
+        current_index = state.progress.current_index
+        processed = state.progress.processed
+        session_processed = state.progress.session_processed
+        success_streak = state.batching.success_streak
+        
+        total_main_cost = state.total_main_cost
+        total_judge_cost = state.total_judge_cost
+        context_state = state.context_state
+        translated_target_by_index = state.translated_target_by_index
+        stats = state.stats
+        effective_batch_size = cfg.effective_batch_size
+        batch_size = cfg.original_batch_size
+        
         elapsed_at_session_start = stats["total_elapsed_seconds"]
         session_start_time = time.time()
-
+        
         def push_eta():
             if processed > 0:
                 t = elapsed_at_session_start + (time.time() - session_start_time)
@@ -142,44 +92,9 @@ def run_pipeline(self, config):
                 if self.shared_state:
                     self.shared_state.update_eta(time_str, finish_str)
 
-        start_time = time.time()
-        session_processed = 0
-
-        self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
-        if self.shared_state:
-            self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
-        if stats.get("total_interventions", 0) > 0:
-            self.ui_queue.put(("intervention_count", stats["total_interventions"]))
-
-        log(self.log_queue, session_log_file, f"🚀 Starting Protected AI Translation with {model_cfg['provider']}")
-        
-        if resume_mode:
-            if override_msg:
-                log(self.log_queue, session_log_file, f"📦 Batch: {batch_size}{override_msg}")
-            elif effective_batch_size != batch_size:
-                log(self.log_queue, session_log_file, f"📦 Batch: configured {batch_size} | continuing with effective size {effective_batch_size} (checkpoint memory)")
-            else:
-                log(self.log_queue, session_log_file, f"📦 Batch Size: {effective_batch_size}")
-        else:
-            log(self.log_queue, session_log_file, f"📦 Batch Size: {effective_batch_size} | Safety Net: ACTIVE")
-
-        self.ui_queue.put(("progress", (processed, total_blocks)))
-        if self.shared_state:
-            self.shared_state.update_progress(processed, total_blocks)
-
-        if resume_mode:
-            all_calls = stats.get("llm_call_times_new", []) + stats.get("llm_call_times_retry", [])
-            total_duration = sum(c[0] for c in all_calls)
-            total_load = sum(c[1] for c in all_calls)
-            if total_duration > 0:
-                historical_speed = total_load / total_duration
-            
-            self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
-            if self.shared_state:
-                self.shared_state.update_cost(total_main_cost, total_judge_cost)
-
         file_mode = 'a' if resume_mode else 'w'
-        success_streak = 0
+        bypass_log_file = None
+        bypass_count = 0
         
         from core.translation.batch_state import BatchState
         from core.translation.pipeline_helpers import evaluate_batch_success, evaluate_batch_failure, prepare_batch_prompt
@@ -489,6 +404,9 @@ def run_pipeline(self, config):
                                 log(self.log_queue, session_log_file, "❌ Manual Intervention cancelled or failed. Stopping.")
                                 self.should_stop = True
                                 break
+
+                if state.batch_success:
+                    current_index += expected_count
 
                 processed = stats.get("processed_total", processed)
                 stats["total_elapsed_seconds"] = elapsed_at_session_start + (time.time() - session_start_time)
