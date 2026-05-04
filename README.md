@@ -66,7 +66,7 @@ English, Hebrew, Arabic, French, Spanish, German, Chinese, Portuguese, Russian, 
 ## 📖 Under the Hood
 
 ### 1. Modular Architecture
-Aegis is built on a decoupled architecture where the **Translation Engine** (`core/`) is isolated from the **User Interface** (`ui/`) and **External Services** (`services/`). Extracted single-responsibility submodules inside the `core/translation/` package isolate context resolution, prompting, response processing, and loop state mechanics. This allows for high-performance multi-threading and ensures the UI remains responsive even during heavy LLM processing.
+Aegis is built on a decoupled architecture where the **Translation Engine** (`core/`) is isolated from the **User Interface** (`ui/`) and **External Services** (`services/`). Extracted single-responsibility submodules inside the `core/translation/` package isolate context resolution, prompting, response processing, initial session initialization (`pipeline_initializer.py`), intervention management (`intervention_handler.py`), and loop state mechanics. This allows for high-performance multi-threading and ensures the UI remains responsive even during heavy LLM processing.
 
 ### 2. Language Profiles
 Aegis uses a dynamic profile system (`core/language_profiles.py`) that automatically handles RTL (Right-to-Left) text, Unicode ranges, and linguistic density ratios. CJK languages (Chinese, Japanese) use character-based auditing to ensure perfect subtitle pacing.
