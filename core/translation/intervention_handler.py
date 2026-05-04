@@ -38,6 +38,7 @@ def execute_manual_intervention_or_bypass(
 ) -> InterventionResult:
     """
     Executes automated bypass or manual intervention on minimal batch failure streak.
+    Does not mutate pipeline state or call self methods directly to prevent Action at a Distance.
     """
     if state.min_batch_failures >= 3:
         log(log_queue, session_log_file, "❌ Persistent failure at minimal batch size. Triggering intervention...")
@@ -70,11 +71,7 @@ def execute_manual_intervention_or_bypass(
                 bypass_dict[m['index']] = cleaned
                 log(log_queue, session_log_file, f"   🚫 IDX {m['index']}: {repr(raw_target)[:60]} → {repr(cleaned)[:60]}")
 
-            if bypass_log_file is None:
-                bypass_log_file = pipeline._create_bypass_log(session_log_file)
-            pipeline._write_bypass_entry(bypass_log_file, eng_src_for_intervention, bypass_dict, reason_for_human)
             bypass_count += 1
-
             received_dict = bypass_dict
             res_json = {
                 "translated_srt": bypass_dict,
@@ -85,23 +82,17 @@ def execute_manual_intervention_or_bypass(
 
             log(log_queue, session_log_file, f"🚫 [BYPASS] Auto-cleanup complete. Resuming...")
 
-            pipeline._finalize_batch_success(
-                original_metadata, received_dict, f_out,
-                translated_target_by_index, res_json, context_state,
-                stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
-            )
-
-            state.min_batch_failures = 0
-            state.failures_at_current_size = 0
-            state.batch_success = True
-
             return InterventionResult(
                 should_stop=False,
                 batch_success=True,
                 state_updates={
-                    "bypass_log_file": bypass_log_file,
+                    "is_bypass": True,
+                    "eng_src_for_intervention": eng_src_for_intervention,
+                    "bypass_dict": bypass_dict,
+                    "reason_for_human": reason_for_human,
                     "bypass_count": bypass_count,
                     "received_dict": received_dict,
+                    "res_json": res_json,
                     "session_start_time": session_start_time
                 }
             )
@@ -135,21 +126,13 @@ def execute_manual_intervention_or_bypass(
                 file_log(session_log_file, f"IDX {idx} | HE (HUMAN): {manual_fix_dict.get(idx, 'MISSING')}")
             file_log(session_log_file, "--------------------------------------------------------")
 
-            pipeline._finalize_batch_success(
-                original_metadata, received_dict, f_out,
-                translated_target_by_index, res_json, context_state,
-                stats, indices, expected_count, pipeline_load, pipeline_start_time, target_is_rtl=profile.target_is_rtl
-            )
-
-            state.min_batch_failures = 0
-            state.failures_at_current_size = 0
-            state.batch_success = True
-
             return InterventionResult(
                 should_stop=False,
                 batch_success=True,
                 state_updates={
+                    "is_bypass": False,
                     "received_dict": received_dict,
+                    "res_json": res_json,
                     "session_start_time": session_start_time
                 }
             )
