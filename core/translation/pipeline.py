@@ -227,13 +227,13 @@ def run_pipeline(self, config):
                             push_eta_func=push_eta
                         )
  
-                        if not batch_passed:
-                            raise ValueError("Audit/Judge Rejection")
- 
                         total_judge_cost += j_cost_delta
                         self.ui_queue.put(("cost", (total_main_cost, total_judge_cost)))
                         if self.shared_state:
                             self.shared_state.update_cost(total_main_cost, total_judge_cost, format_cost_display(total_main_cost, total_judge_cost))
+
+                        if not batch_passed:
+                            raise ValueError("Audit/Judge Rejection")
  
                         self._finalize_batch_success(
                             original_metadata, received_dict, f_out, 

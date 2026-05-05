@@ -29,17 +29,30 @@ def file_log(log_file, text):
 
 def format_cost_display(main_cost, judge_cost):
     """Formats the cost/token display for the UI."""
-    def format_single(val):
-        if val > 100:
+    def format_single(val, is_token):
+        if is_token:
             return f"{int(val):,}"
         return f"${val:.4f}"
     
-    main_str = format_single(main_cost)
-    label = "Tokens" if main_cost > 100 else "Cost"
-    if judge_cost > 0:
-        total_str = format_single(main_cost + judge_cost)
-        return f"{label}: {total_str} (M: {main_str} | J: {format_single(judge_cost)})"
-    return f"{label}: {main_str}"
+    main_is_tokens = main_cost > 100
+    judge_is_tokens = judge_cost > 100
+    
+    if judge_cost == 0:
+        label = "Tokens" if main_is_tokens else "Cost"
+        return f"{label}: {format_single(main_cost, main_is_tokens)}"
+
+    if main_is_tokens != judge_is_tokens:
+        # Mixed mode: Local model (Tokens) + Paid model (Cost)
+        m_label = "Tokens" if main_is_tokens else "Cost"
+        j_label = "Tokens" if judge_is_tokens else "Cost"
+        return f"{m_label}: {format_single(main_cost, main_is_tokens)} | J-{j_label}: {format_single(judge_cost, judge_is_tokens)}"
+    
+    # Same mode (Usually both Paid)
+    label = "Tokens" if main_is_tokens else "Cost"
+    total_str = format_single(main_cost + judge_cost, main_is_tokens)
+    main_str = format_single(main_cost, main_is_tokens)
+    judge_str = format_single(judge_cost, judge_is_tokens)
+    return f"{label}: {total_str} (M: {main_str} | J: {judge_str})"
 
 def get_eta_string(elapsed_time, processed, total_blocks):
     """
