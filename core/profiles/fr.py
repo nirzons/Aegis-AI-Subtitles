@@ -84,10 +84,6 @@ PROFILE = {
     "native_placeholder_indicators": ["<insérez ici", "<doit être rempli", "<la traduction finale", "<nom du locuteur", "<instruction de continuité"],
     "native_robot_phrases": ["Voici la traduction", "Ici apparaît", "Traduction :", "Le sous-titre suivant"],
     "native_exempt_labels": ["Note", "Attention", "PS"],
-    "native_repair_note_ghost": "IDX:{indices}|Réparation automatique appliquée pour supprimer les fragments fantômes de la langue source. Vérifiez que la phrase coule naturellement.",
-    "native_repair_note_newline": "Réparation automatique appliquée au format de ligne (\\n).",
-    "native_stubborn_split_log": "💡 Modèle obstiné détecté. Application d'une division programmée pour l'index {idx}.",
-    "native_stubborn_resolved_log": "✅ La division programmée a résolu le problème. Poursuite...",
     "native_intervention_header": "####### INTERVENTION MANUELLE REQUISE #######",
     "native_intervention_instructions": [
         "Instructions :",

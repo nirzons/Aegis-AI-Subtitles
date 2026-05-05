@@ -138,10 +138,6 @@ PROFILE = {
     "native_placeholder_indicators": ["<הכנס כאן", "<חובה למלא", "<התרגום הסופי", "<שם הדובר", "<הוראת רצף"],
     "native_robot_phrases": ["הנה התרגום", "כאן מופיע", "תרגום:", "הכתובית הבאה"],
     "native_exempt_labels": ["הערה", "שים לב", "נ.ב"],
-    "native_repair_note_ghost": "IDX:{indices}|בוצע תיקון אוטומטי להסרת שאריות אנגלית (Ghost fragments). וודא היטב שהמשפט תקין וזורם.",
-    "native_repair_note_newline": "בוצע תיקון אוטומטי לפורמט השורות (n\\).",
-    "native_stubborn_split_log": "💡 דגם עקשן זוהה. מבצע חלוקה תוכניתית עבור אינדקס {idx}.",
-    "native_stubborn_resolved_log": "✅ החלוקה התוכניתית פתרה את הבעיה. ממשיך...",
     "native_intervention_header": "####### התערבות אנושית נדרשת ################",
     "native_intervention_instructions": [
         "הוראות:",
