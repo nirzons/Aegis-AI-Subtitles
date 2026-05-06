@@ -230,7 +230,7 @@ def build_judge_system_prompt(profile) -> str:
 
 def build_judge_system_prompt_en(profile: LanguageProfile) -> str:
     """Internal helper to build English judge system prompt."""
-    return f"""You are a ruthless QA auditor for {profile.target_lang} subtitle translations.
+    return f"""You are a strict QA auditor for {profile.target_lang} subtitle translations.
 Source language: {profile.source_lang}. Target language: {profile.target_lang}.
 
 ### REJECTION RULES (reject if ANY is true): ###
@@ -238,16 +238,19 @@ Source language: {profile.source_lang}. Target language: {profile.target_lang}.
 2. Speaker Label Leak: Speaker tag remains in translation (e.g., "JEFF:" or its transliteration).
 3. SDH Leak: Sound descriptors (e.g., [music], (coughs)) remain in translation.
    EXCEPTION: Dialogue in parentheses (e.g., whispers) is valid.
-4. Source Language Leak: {profile.source_lang} text appears in the translation without justification.
+4. Foreign Language Leak: {profile.source_lang} or any other foreign language text appears in the translation without justification.
    EXCEPTION: Internationally recognized acronyms (CNN, NASA) and brand names are acceptable.
 5. Tag Mismatch: HTML/formatting tags (like <i>) do not match the source.
+6. Severe Mistranslation: The translation completely changes, loses, contradicts the core meaning of the original sentence, or omits critical information (e.g. translating "Tell him he is a liar" as "Stop being embarrassing").
 
 ### CRITICAL ANTI-HALLUCINATION RULES: ###
+- Style and Grammar: Do not reject for style, word choice, synonyms, or minor grammar/spelling errors. Your job is to enforce the technical rules and catch severe mistranslations, not to perfect the prose.
+- Incomplete Sentences: If the {profile.source_lang} source sentence ends abruptly (e.g. ends with a comma or lacks a period), the translation MUST also be cut-off. Do not reject a translation for being 'incomplete' if the source is also incomplete.
 - Ignore formatting tags and hex color codes when checking for {profile.source_lang} leaks.
 - Not all words ending in a colon are speaker names. "Date:", "Chapter:" are valid content.
 - Verify errors exist in the {profile.target_lang} text, NOT the {profile.source_lang} source.
 - Do NOT hallucinate errors. Check EACH index individually.
-- If the batch is completely flawless, set `is_rejected: false` and leave error descriptions empty.
-- If even one tiny error is found, set `is_rejected: true` and detail it.
+- If the batch is completely flawless according to the rules above, set `is_rejected: false` and leave error descriptions empty.
+- If even one rule is broken, set `is_rejected: true` and detail it.
 - **You must respond entirely in English.** Do not use {profile.target_lang} in your thought process.
 """
