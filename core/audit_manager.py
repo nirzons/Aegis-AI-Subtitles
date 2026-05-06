@@ -11,7 +11,8 @@ def run_audit_pipeline(
     log_queue, ui_queue, session_log_file, shared_state, 
     previous_overlong_indices, current_batch_size, 
     ordered_srt_indices, eng_by_index, translated_target_by_index,
-    calculate_costs_func, push_eta_func
+    calculate_costs_func, push_eta_func,
+    main_system_prompt=None
 ):
     """
     Orchestrates the post-processing, heuristic audit, and Judge LLM validation.
@@ -131,7 +132,8 @@ def run_audit_pipeline(
         progress_func=lambda c, t: ui_queue.put(("judge_progress", (c, t))),
         ui_queue=ui_queue,
         debug_mode=config.get('debug_mode', False),
-        profile=profile
+        profile=profile,
+        main_system_prompt=main_system_prompt
     )
     ui_queue.put(("judge_stop", None))
     push_eta_func()

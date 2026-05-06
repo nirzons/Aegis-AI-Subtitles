@@ -224,7 +224,8 @@ def run_pipeline(self, config):
                             eng_by_index=eng_by_index,
                             translated_target_by_index=translated_target_by_index,
                             calculate_costs_func=self._calculate_costs,
-                            push_eta_func=push_eta
+                            push_eta_func=push_eta,
+                            main_system_prompt=system_prompt
                         )
  
                         total_judge_cost += j_cost_delta

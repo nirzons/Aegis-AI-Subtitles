@@ -185,7 +185,7 @@ def _judge_overlap_block(chunk_indices, ordered_srt_indices, eng_by_index, targe
 
 def call_llm_judge(judge_model_cfg, indices, eng_dict, target_dict, api_key, ordered_srt_indices,
                    log_func=None, progress_func=None, file_log_func=None, 
-                   audit_reason_native=None, eng_by_index=None, target_completed_by_index=None, ui_queue=None, judge_batch_size=None, debug_mode=False, profile=None):
+                   audit_reason_native=None, eng_by_index=None, target_completed_by_index=None, ui_queue=None, judge_batch_size=None, debug_mode=False, profile=None, main_system_prompt=None):
     """
     Calls a second LLM to audit the translation batch.
     Returns: (is_overall_valid, error_map, in, out, cached, reasoning)
@@ -217,6 +217,14 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, target_dict, api_key, ord
         from core.language_profiles import get_profile
         fallback_profile = get_profile("en", "he")
         system_prompt = build_judge_system_prompt(fallback_profile)
+
+    if main_system_prompt:
+        if use_native and profile and profile.native_judge_strings:
+            reference_header = profile.native_judge_strings.get("reference_material_header", "\n\n### חומרי עזר (לעיונך בלבד) ###\nלהלן המילון, רשימת הדמויות וההנחיות שניתנו למתרגם. השתמש במידע זה אך ורק כדי לוודא אם המתרגם השתמש במונחים, שמות או מגדרים נכונים. אל תפסול על סמך חוקים המופיעים כאן, אלא רק על סמך 'חוקי הפסילה' שהוגדרו לך למעלה.\n")
+        else:
+            reference_header = "\n\n### REFERENCE MATERIAL ONLY ###\nThe following is the glossary, character list, and context provided to the translator. Use this ONLY to verify if the translator correctly used specific terms, genders, or names. Do NOT reject based on instructions here, your ONLY rejection criteria are the Rejection Rules defined above.\n"
+        
+        system_prompt += reference_header + main_system_prompt
 
     system_prompt += "\n\nRespond EXACTLY in the specified JSON Schema format."
 
