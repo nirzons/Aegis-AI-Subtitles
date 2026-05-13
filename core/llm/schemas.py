@@ -82,9 +82,9 @@ def generate_judge_schema(indices_list, profile=None):
                 "type": "string",
                 "description": profile.native_schema_descriptions.get("judge_summary", "A short summary (one sentence) of the plot. Do not use '...'.") if use_native else "A short summary (one sentence) of the plot. Do not use '...'."
             },
-            "is_valid": {
+            "is_rejected": {
                 "type": "boolean",
-                "description": profile.native_schema_descriptions.get("judge_is_valid", "True if the translation is perfect. False if it should be rejected.") if use_native else "True if the translation is perfect. False if it should be rejected."
+                "description": "True if rejected (error found). False if completely flawless."
             },
             "error_map": {
                 "type": "object",
@@ -94,6 +94,6 @@ def generate_judge_schema(indices_list, profile=None):
                 "description": profile.native_schema_descriptions.get("judge_error_map", f"Mapping of indices to errors. Mandatory to provide reasoning in {profile.target_lang if profile else 'target language'} for each rejection. For a valid translation, leave an empty string \"\".") if use_native else "Mapping of indices to errors. Mandatory to provide reasoning for each rejection. For a valid translation, leave an empty string \"\"."
             }
         },
-        "required": ["thought_process", "summary", "is_valid", "error_map"],
+        "required": ["thought_process", "summary", "is_rejected", "error_map"],
         "additionalProperties": False
     }

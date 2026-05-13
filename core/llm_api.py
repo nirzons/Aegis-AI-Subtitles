@@ -210,13 +210,12 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, target_dict, api_key, ord
                           any(m in judge_model_cfg.get('name', '').lower() for m in ["gpt-4", "o1"])) or \
                           (judge_model_cfg.get('provider') == 'lmstudio')
 
-    if profile:
-        system_prompt = build_judge_system_prompt(profile)
-    else:
+    if not profile:
         # Fallback to English/Hebrew if no profile is provided
         from core.language_profiles import get_profile
-        fallback_profile = get_profile("en", "he")
-        system_prompt = build_judge_system_prompt(fallback_profile)
+        profile = get_profile("en", "he")
+    
+    system_prompt = build_judge_system_prompt(profile)
 
     if main_system_prompt:
         if use_native and profile and profile.native_judge_strings:
@@ -348,6 +347,19 @@ def call_llm_judge(judge_model_cfg, indices, eng_dict, target_dict, api_key, ord
             "required": ["thought_process", "summary", "is_rejected", "error_map"],
             "additionalProperties": False
         }
+
+        if not supports_structured:
+            # Construct a friendly textual schema template for non-native structured models
+            schema_template = {
+                "thought_process": profile.native_judge_strings.get("field_desc_thought", "In-depth analysis...") if use_native and profile.native_judge_strings else "In-depth analysis (minimum one full sentence). Explain exactly what you checked.",
+                "summary": profile.native_judge_strings.get("field_desc_summary", "Short plot summary...") if use_native and profile.native_judge_strings else "Short plot summary.",
+                "is_rejected": "<true | false>",
+                "error_map": {str(k): (profile.native_judge_strings.get("field_desc_error_map", "Error description if rejected.") if use_native and profile.native_judge_strings else "Error description (full sentence). Leave empty if flawless.") for k in chunk_indices}
+            }
+            mandatory_msg = getattr(profile, 'native_schema_mandatory_label', None) if (use_native and hasattr(profile, 'native_schema_mandatory_label')) else "### MANDATORY: Respond EXACTLY in the following JSON Schema format: ###"
+            if not mandatory_msg:
+                mandatory_msg = "### MANDATORY: Respond EXACTLY in the following JSON Schema format: ###"
+            user_prompt += f"\n{mandatory_msg}\n```json\n{json.dumps(schema_template, indent=4, ensure_ascii=False)}\n```\n"
 
         try:
             if log_func:
