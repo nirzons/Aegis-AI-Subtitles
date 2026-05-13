@@ -78,6 +78,16 @@ def run_pipeline(self, config):
                     self.shared_state.update_eta(time_str, finish_str)
  
         file_mode = 'a' if resume_mode else 'w'
+        
+        # SAFETY OVERRIDE: Prevent accidental truncation of previous work if starting fresh.
+        if not resume_mode and os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            backup_path = output_file.replace(".srt", f"_backup_{int(time.time())}.srt")
+            try:
+                import shutil
+                shutil.copy2(output_file, backup_path)
+                log(self.log_queue, session_log_file, f"🛡️ Found existing output. Created safety backup: {os.path.basename(backup_path)}")
+            except Exception as e:
+                 log(self.log_queue, session_log_file, f"⚠️ Failed to create safety backup: {e}")
         bypass_log_file = None
         bypass_count = 0
         
