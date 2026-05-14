@@ -37,6 +37,11 @@ class MainUILayout:
         self.widgets.target_combo = ttk.Combobox(top_frame, textvariable=self.widgets.target_lang_var, state="readonly", width=15)
         self.widgets.target_combo.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
 
+        # Move Debug mode here for maximum visibility (Row 0, Col 4)
+        self.widgets.debug_var = tk.BooleanVar(value=False)
+        self.widgets.chk_debug = ttk.Checkbutton(top_frame, text="🐞 Debug mode", variable=self.widgets.debug_var, command=app.toggle_debug_mode)
+        self.widgets.chk_debug.grid(row=0, column=4, padx=10, pady=5, sticky=tk.W)
+
         # Row 1: Model Selection
         create_label(top_frame, "Model:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         self.widgets.model_var = tk.StringVar()
@@ -112,9 +117,9 @@ class MainUILayout:
         self.widgets.btn_open_translated = ttk.Button(ctrl_frame, text="📂 View Output", command=app.open_translated_srt, state=tk.DISABLED)
         self.widgets.btn_open_translated.pack(side=tk.LEFT, padx=5)
 
-        self.widgets.debug_var = tk.BooleanVar(value=False)
-        self.widgets.chk_debug = ttk.Checkbutton(ctrl_frame, text="🐞 Debug mode", variable=self.widgets.debug_var, command=app.toggle_debug_mode)
-        self.widgets.chk_debug.pack(side=tk.LEFT, padx=15)
+        # Renamed 'Polish' to 'Audit' to eliminate semantic double-meaning
+        self.widgets.btn_polish = ttk.Button(ctrl_frame, text="✨ Audit", command=app.run_semantic_polish, state=tk.NORMAL)
+        self.widgets.btn_polish.pack(side=tk.LEFT, padx=5)
 
         # 3. Status & Progress Frame
         progress_header = tk.Frame(self.root, bg=self.root["bg"])

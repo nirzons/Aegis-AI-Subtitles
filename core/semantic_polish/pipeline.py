@@ -151,7 +151,10 @@ def run_semantic_polish_pipeline(
     
     # 6. Write Consolidated Markdown Audit Report
     base_name = os.path.splitext(os.path.basename(translated_srt))[0]
-    report_path = f"{base_name}_SENIOR_EDITOR_REPORT.md"
+    audit_dir = "Audit reports"
+    if not os.path.exists(audit_dir):
+        os.makedirs(audit_dir)
+    report_path = os.path.join(audit_dir, f"{base_name}_SENIOR_EDITOR_REPORT.md")
     
     md_report = generate_markdown_report(
         translated_basename=base_name,
@@ -168,10 +171,16 @@ def run_semantic_polish_pipeline(
         
     notify(f"📁 A complete Polish Report written successfully to: {report_path}")
     
+    # Enrich all suggestions with resolved English original text for API consumers
+    for sug in all_suggestions:
+        cue_idx = str(sug.get("index", ""))
+        sug["en"] = en_lookup.get(cue_idx, "")
+        
     # Return summary artifact for orchestration
     return {
         "report_file": report_path,
         "suggestions_count": len(all_suggestions),
+        "suggestions": all_suggestions, # Hand over to visual board!
         "telemetry": telemetry,
         "duration_seconds": duration,
         "estimated_cost_usd": est_cost

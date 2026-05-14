@@ -17,6 +17,7 @@ With the built-in **Live Viewer**, you can audit the translation process in real
 - **🌐 Universal Language Support**: Supports any source/target language pair. Built-in profiles include Hebrew, Arabic, French, Spanish, Chinese (CJK), German, and more.
 - **🧠 Context-Aware Translation**: Processes subtitles in overlapping batches using a **Sandwich Architecture** (Thought -> Summary -> Work -> Metadata) to maximize model focus and narrative continuity.
 - **⚖️ AI Judge System**: A dedicated "Judge" model semantically verifies suspicious translations, detecting hallucinations, omissions, and language leakage.
+- **✨ Offline Senior Editor**: An advanced offline proofreading suite. Once translation is done, audit your SRT with heavyweight LLMs to catch rare cultural idioms and glossary violations via a beautiful, interactive side-by-side review board.
 - **🛡️ Heuristic Auditor**: A high-speed deterministic scanner that enforces line-length constraints, SDH removal, and dynamic speaker name deletion. It automatically adjusts between **word-based** and **character-based (CJK)** counting.
 - **🩹 Self-Healing & Resilience**: Path-breaking schema inference that recovers translations from hallucinated JSON keys—optimized specifically for high-reasoning models like GPT-5/o1.
 - **💰 Cost-Optimized**: Native support for prompt caching (GPT-5, DeepSeek 90% discount) with real-time token tracking, hit-ratio logs, and reasoning-load metrics.
@@ -74,10 +75,14 @@ Aegis uses a dynamic profile system (`core/language_profiles.py`) that automatic
 ### 3. The Heuristic Shield
 A deterministic auditor (`core/audit_manager.py` & `core/text_processing.py`) that runs before any AI check. It catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long. During retries, it injects the **exact offending word** into the feedback loop to force compliance.
 
+### 4. The Senior Editor Polish Loop
+An offline proofreading system (`core/semantic_polish/`) that operates completely independent of the translation thread. It features the **Hybrid Mastermind** for distilling massive system instructions into persistent token-lean cache files (`editor_profiles/`), sequentially audits overlapping segments to bypass rate limits, and applies physical merges protected by a state-preserving backup vault and custom RTL punctuation repair.
+
 ---
 
 ## 📚 Technical Documentation
 - **[Aegis SysPrm Guide](docs/SYSPRM_GUIDE.md)**: How to use AI to build project-specific context files.
 - **[Ratio Calibration Guide](docs/RATIO_CALIBRATION.md)**: Tuning the Heuristic Shield for different languages and shows.
+- **[Senior Editor Proofreading Guide](docs/SENIOR_EDITOR_GUIDE.md)**: In-depth tutorial on using the offline Senior Editor Audit suite.
 - **[System Overview](system_overview.md)**: Deep dive into the architecture and resilience features.
 - **[Logging Audit](logging_audit.md)**: Comprehensive guide to diagnostic log signatures.

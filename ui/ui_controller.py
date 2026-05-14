@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 # Internal Modules
 from utils.settings import SETTINGS
@@ -254,7 +254,7 @@ class UIController:
         for w in [self.app.ui.widgets.model_combo, self.app.ui.widgets.batch_entry, self.app.ui.widgets.srt_combo, 
                   self.app.ui.widgets.sysprm_combo, self.app.ui.widgets.judge_model_combo, self.app.ui.widgets.judge_batch_entry,
                   self.app.ui.widgets.resume_combo, self.app.ui.widgets.btn_settings, self.app.ui.widgets.btn_manage_checkpoints,
-                  self.app.ui.widgets.btn_restart, self.app.ui.widgets.btn_start]:
+                  self.app.ui.widgets.btn_restart, self.app.ui.widgets.btn_start, self.app.ui.widgets.btn_polish]:
             w.config(state=state)
         self.app.ui.widgets.btn_stop.config(state=tk.NORMAL if state == tk.DISABLED else tk.DISABLED)
         self.app.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
@@ -543,3 +543,337 @@ class UIController:
     def process_queues(self):
         self.queue_dispatcher.process_queues()
         self.app.root.after(100, self.process_queues)
+
+    def run_semantic_polish(self):
+        """
+        Executes Phase 2, Step 2.1: Fires the background thread to audit 
+        the finalized translation with the Senior Editor semantic polish pipeline.
+        """
+        import threading
+        from tkinter import messagebox
+        from core.semantic_polish.pipeline import run_semantic_polish_pipeline
+        from utils.settings import SETTINGS
+        
+        if self.app.is_running:
+            return
+            
+        # 1. State Gathering
+        srt_name = self.app.ui.widgets.srt_var.get()
+        sys_name = self.app.ui.widgets.sysprm_var.get()
+        
+        if not srt_name or not sys_name:
+            messagebox.showerror("File Selection Error", "Please select both an SRT File and a SysPrm profile first.", parent=self.app.root)
+            return
+            
+        # 2. Dynamic Output File Path Discovery
+        profile = SETTINGS.get_active_profile()
+        model_idx = self.app.ui.widgets.model_var.get().split(" - ")[0]
+        model_cfg = SETTINGS.config["models"].get(model_idx)
+        
+        if not model_cfg:
+            messagebox.showerror("Model Error", "Could not resolve Model configuration.", parent=self.app.root)
+            return
+            
+        api_key = SETTINGS.config["api_keys"].get(model_cfg['provider'])
+        if not api_key:
+            messagebox.showerror("API Key Missing", f"Please enter your {model_cfg['provider'].upper()} key in Settings.", parent=self.app.root)
+            return
+
+        # Discovery: Scan the output directory for any files matching the base_name and target language code
+        base_name = srt_name.replace('.srt', '')
+        target_suffix = f"_{profile.target_lang_code}.srt"
+        
+        candidate_files = []
+        try:
+            if os.path.exists(self.app.output_dir):
+                for f in os.listdir(self.app.output_dir):
+                    # Pattern match: [source_basename]_*_[target_lang].srt
+                    if f.startswith(base_name) and f.endswith(target_suffix):
+                        candidate_files.append(f)
+        except Exception:
+            pass
+            
+        output_filename = None
+        
+        if len(candidate_files) == 0:
+            # Expected default if nothing else exists
+            fallback_name = base_name + f'_{model_cfg["name"]}_{profile.target_lang_code}.srt'
+            messagebox.showerror("Output Not Found", 
+                f"Could not find any translated file for '{srt_name}' in output folder.\n\n"
+                f"Expected pattern: {base_name}_*{target_suffix}", parent=self.app.root)
+            return
+            
+        elif len(candidate_files) == 1:
+            output_filename = candidate_files[0]
+            
+        else:
+            # Multiple files found! Prompt user to select exactly which one to audit.
+            prompt_text = f"Multiple translated versions found for this SRT.\n\nPlease select which version you wish to Audit:"
+            dialog = FileSelectionDialog(self.app.root, "Select Translation Version", prompt_text, candidate_files)
+            if not dialog.result:
+                # User cancelled
+                return
+            output_filename = dialog.result
+
+        translated_path = os.path.join(self.app.output_dir, output_filename)
+        source_path = os.path.join(self.app.english_subs_dir, srt_name)
+        sysprm_path = os.path.join(self.app.sysprm_dir, sys_name)
+            
+        # 3. Ask Consent
+        ans = messagebox.askyesno("Confirm Semantic Polish", 
+            f"Do you want to run a Senior Editor semantic audit on:\n'{output_filename}'?\n\n"
+            f"💡 Heavyweight Auditor: {model_cfg['name']}\n"
+            f"💰 Estimated total cost: Less than $0.02 USD.\n\n"
+            f"The audit runs in the background and streams progress to the terminal.\n"
+            f"Proceed?", parent=self.app.root)
+            
+        if not ans:
+            return
+            
+        # 4. GUI Locking State
+        self.app.is_running = True
+        self._toggle_ui_state(tk.DISABLED)
+        self.app.ui.widgets.log_text.delete(1.0, tk.END)
+        
+        # Custom progress bar animation wrapper
+        self.app.ui.widgets.progress_bar.config(mode='indeterminate')
+        self.app.ui.widgets.progress_bar.start(15)
+        self.app.ui.widgets.lbl_progress.config(text="✨ Semantic Polish Running...")
+        
+        def background_audit_thread():
+            try:
+                # Stream real-time logs straight into the UI terminal!
+                def app_log_bridge(msg):
+                    from utils.app_utils import log
+                    log(self.app.log_queue, self.app.session_log_file, msg)
+                    
+                # Quietly write massive raw prompts purely to physical disk without GUI clutter!
+                def app_file_log_bridge(msg):
+                    from utils.app_utils import file_log
+                    file_log(self.app.session_log_file, msg)
+                    
+                app_log_bridge("🎬 Initiating Senior Editor Audit Execution Loop...")
+                
+                result = run_semantic_polish_pipeline(
+                    source_srt=source_path,
+                    translated_srt=translated_path,
+                    sysprm_path=sysprm_path,
+                    model_cfg=model_cfg,
+                    api_key=api_key,
+                    batch_size=40,
+                    context_size=2,
+                    log_func=app_log_bridge,
+                    file_log_func=app_file_log_bridge,
+                    debug_mode=self.app.ui.widgets.debug_var.get()
+                )
+                
+                # Fire callback on the main TKinter loop thread!
+                def on_success():
+                    self.app.ui.widgets.progress_bar.stop()
+                    self.app.ui.widgets.progress_bar.config(mode='determinate')
+                    self.app.ui.widgets.lbl_progress.config(text="✨ Audit Complete.")
+                    self.app.is_running = False
+                    self._toggle_ui_state(tk.NORMAL)
+                    
+                    # Alert and pop open the Markdown Report automatically!
+                    messagebox.showinfo("Audit Complete", 
+                        f"✨ Senior Editor Audit Successful!\n\n"
+                        f"• {result['suggestions_count']} improvements suggested.\n"
+                        f"• Total Cost: ${result['estimated_cost_usd']:.5f}\n\n"
+                        f"Opening the generated Report now...", parent=self.app.root)
+
+                    # Pop Open the Beautiful Semantic Review Board!
+                    try:
+                        from ui.components.semantic_merge_window import SemanticMergeWindow
+                        SemanticMergeWindow(
+                            self.app.root, 
+                            result, 
+                            profile=profile,
+                            on_apply_callback=lambda approved: self.apply_polish_merges(approved, result, translated_path)
+                        )
+                    except Exception as merge_err:
+                        log(self.app.log_queue, self.app.session_log_file, f"⚠️ Visual Review Board launch failed: {merge_err}")
+
+                    # Auto-launch using default OS association with Notepad fallback
+                    try:
+                        full_report_path = os.path.abspath(result['report_file'])
+                        if os.path.exists(full_report_path):
+                            try:
+                                os.startfile(full_report_path)
+                            except OSError:
+                                # Fallback for systems without a default .md handler
+                                import subprocess
+                                subprocess.Popen(['notepad.exe', full_report_path])
+                    except Exception:
+                        pass
+                        
+                self.app.root.after(0, on_success)
+                
+            except Exception as e:
+                def on_fail():
+                    self.app.ui.widgets.progress_bar.stop()
+                    self.app.ui.widgets.progress_bar.config(mode='determinate')
+                    self.app.ui.widgets.lbl_progress.config(text="❌ Semantic Polish Failed.")
+                    self.app.is_running = False
+                    self._toggle_ui_state(tk.NORMAL)
+                    messagebox.showerror("Audit Pipeline Failure", f"An error occurred during the pipeline run:\n\n{e}", parent=self.app.root)
+                    
+                self.app.root.after(0, on_fail)
+
+        # Execute background daemon thread!
+        threading.Thread(target=background_audit_thread, daemon=True).start()
+
+    def apply_polish_merges(self, approved_indices, result, translated_path):
+        """
+        Phase 2, Step 2.3: Merges the user-approved senior editor fixes 
+        back into the actual translated SRT file on disk.
+        """
+        from tkinter import messagebox
+        import shutil
+        from core.text_processing import fix_rtl
+        from utils.settings import SETTINGS
+        
+        profile = SETTINGS.get_active_profile()
+        is_rtl = profile.target_is_rtl if profile else False
+        
+        if not approved_indices:
+            messagebox.showinfo("No Changes", "No changes were applied as no items were approved.", parent=self.app.root)
+            return
+            
+        try:
+            # 1. Create indestructible safety backup with state-protection check
+            backup_path = translated_path + ".bak"
+            backup_written = False
+            
+            if os.path.exists(backup_path):
+                ans = messagebox.askyesnocancel(
+                    "Backup File Exists",
+                    f"A backup version for this subtitle already exists:\n{os.path.basename(backup_path)}\n\n"
+                    f"• Click [Yes] to OVERWRITE it with a fresh copy of the active file.\n"
+                    f"• Click [No] to KEEP the existing backup and proceed with merging.\n"
+                    f"• Click [Cancel] to abort the merging operation completely.",
+                    parent=self.app.root
+                )
+                if ans is None: # User pressed Cancel
+                    return
+                elif ans is True: # User pressed Yes (Overwrite)
+                    shutil.copy2(translated_path, backup_path)
+                    backup_written = True
+                else: # User pressed No (Keep Old)
+                    pass
+            else:
+                # Quietly write initial backup if none exists
+                shutil.copy2(translated_path, backup_path)
+                backup_written = True
+            
+            # 2. Build fast mapping lookup for approved indices
+            suggestions_map = {
+                str(sug.get("index")): sug.get("replacement_he", "") 
+                for sug in result.get("suggestions", []) 
+                if str(sug.get("index")) in approved_indices
+            }
+            
+            # 3. Parse the original file block-by-block
+            with open(translated_path, "r", encoding="utf-8-sig") as f:
+                raw = f.read()
+            
+            # Standardize linebreaks to match and split blocks securely
+            content = raw.replace("\r\n", "\n")
+            blocks = [b.strip() for b in content.split('\n\n') if b.strip()]
+            new_blocks = []
+            merge_count = 0
+            
+            for b in blocks:
+                lines = b.split('\n')
+                if len(lines) >= 3:
+                    cue_idx = lines[0].strip()
+                    if cue_idx in suggestions_map:
+                        # OVERWRITE target lines (Line 2+), preserving Cue & Timestamp
+                        new_text = suggestions_map[cue_idx]
+                        
+                        # Re-apply OS/media-player specific RTL punctuation formatting!
+                        if is_rtl:
+                            new_text = fix_rtl(new_text, is_rtl=True, profile=profile)
+                            
+                        new_block = f"{cue_idx}\n{lines[1]}\n{new_text}"
+                        new_blocks.append(new_block)
+                        merge_count += 1
+                        continue
+                new_blocks.append(b)
+                
+            # 4. Ensure clean, pure \n across all blocks, then let Python handle OS native translation
+            final_content = "\n\n".join(new_blocks) + "\n"
+            # Strip existing \r to prevent double \r\r\n on Windows when written in text-mode
+            final_content = final_content.replace("\r\n", "\n").replace("\r", "")
+            
+            with open(translated_path, "w", encoding="utf-8-sig") as f:
+                f.write(final_content)
+                
+            # 5. Log and Display visual success summary!
+            log_msg = f"💾 [Merger] Merged {merge_count} Senior Editor fixes into {os.path.basename(translated_path)}!"
+            log(self.app.log_queue, self.app.session_log_file, log_msg)
+            
+            if backup_written:
+                log(self.app.log_queue, self.app.session_log_file, f"🛡️ [Merger] Safety backup updated at {os.path.basename(backup_path)}.")
+                backup_status_msg = f"• Backup written securely as:\n  {os.path.basename(backup_path)}"
+            else:
+                log(self.app.log_queue, self.app.session_log_file, f"🛡️ [Merger] Previous safety backup preserved intact.")
+                backup_status_msg = f"• Previous backup preserved securely on disk."
+                
+            messagebox.showinfo("Merge Successful", 
+                f"🎉 Merging Completed Successfully!\n\n"
+                f"• {merge_count} approved edits physically applied.\n"
+                f"{backup_status_msg}\n\n"
+                f"Your finalized SRT file is updated and ready for viewing!", parent=self.app.root)
+                
+        except Exception as e:
+            messagebox.showerror("Merging Failure", f"Failed to rewrite the SRT file:\n\n{e}", parent=self.app.root)
+
+
+class FileSelectionDialog(tk.Toplevel):
+    def __init__(self, parent, title, prompt, items):
+        """
+        Modal dialog allowing the user to pick exactly which translation version 
+        they want to Audit if multiple versions exist in the folder.
+        """
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("500x300")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        lbl = tk.Label(self, text=prompt, wraplength=460, justify="left", font=("Segoe UI", 10), padx=15, pady=15)
+        lbl.pack(anchor="w")
+        
+        frame = ttk.Frame(self, padding=(15, 0, 15, 10))
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.listbox = tk.Listbox(frame, font=("Segoe UI", 10), bg="#ffffff", selectbackground="#3498db", selectmode=tk.SINGLE)
+        sb = ttk.Scrollbar(frame, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=sb.set)
+        
+        for item in items:
+            self.listbox.insert(tk.END, item)
+            
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Pre-select first entry
+        self.listbox.select_set(0)
+        self.listbox.bind("<Double-Button-1>", lambda e: self._on_confirm())
+        
+        btn_frame = ttk.Frame(self, padding=15)
+        btn_frame.pack(fill=tk.X)
+        
+        ttk.Button(btn_frame, text="Select", command=self._on_confirm).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        
+        parent.wait_window(self)
+        
+    def _on_confirm(self):
+        sel = self.listbox.curselection()
+        if sel:
+            self.result = self.listbox.get(sel[0])
+        self.destroy()
