@@ -134,8 +134,8 @@ def run_semantic_audit_pipeline(
             for sug in valid_suggestions:
                 cue_idx = str(sug.get("index", ""))
                 en_text = en_lookup.get(cue_idx, "")
-                rep_text = sug.get("replacement_he", "")
-                curr_he = sug.get("current_he", "")
+                rep_text = str(sug.get("replacement_he") or "")
+                curr_he = str(sug.get("current_he") or "")
                 
                 # 🛡️ Discard immediately if the proposed replacement is identical to the current text (No physical change)
                 if rep_text.strip() == curr_he.strip():

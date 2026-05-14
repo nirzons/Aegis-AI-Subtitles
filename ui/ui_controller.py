@@ -253,7 +253,7 @@ class UIController:
         
         log(self.app.log_queue, self.app.session_log_file, "✅ File lists refreshed.")
 
-    def _toggle_ui_state(self, state):
+    def _toggle_ui_state(self, state, is_audit=False):
         for w in [self.app.ui.widgets.model_combo, self.app.ui.widgets.batch_entry, self.app.ui.widgets.srt_combo, 
                   self.app.ui.widgets.sysprm_combo, self.app.ui.widgets.judge_model_combo, self.app.ui.widgets.judge_batch_entry,
                   self.app.ui.widgets.resume_combo]:
@@ -262,7 +262,11 @@ class UIController:
                   self.app.ui.widgets.btn_restart, self.app.ui.widgets.btn_start, self.app.ui.widgets.btn_audit]:
             btn.config(state=state)
         self.app.ui.widgets.btn_stop.config(state=tk.NORMAL if state == tk.DISABLED else tk.DISABLED)
-        self.app.ui.widgets.btn_open_translated.config(state=state)
+        
+        if is_audit:
+            self.app.ui.widgets.btn_open_translated.config(state=tk.DISABLED)
+        elif state == tk.NORMAL:
+            self.app.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
 
     def refresh_models_ui(self):
         model_list = [f"{k} - {v['name']} ({v['provider']})" for k, v in SETTINGS.config["models"].items()]
@@ -527,6 +531,7 @@ class UIController:
         self.app.engine.should_stop = False
         self.app.engine.bypass_intervention = self.app.ui.widgets.bypass_intervention_var.get()
         self._toggle_ui_state(tk.DISABLED)
+        self.app.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
         
         # In Hot Resume mode, don't wipe the terminal. Add a separator instead.
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -705,7 +710,7 @@ class UIController:
         # 5. GUI Locking & Asynchronous Infrastructure Booting
         self.app.is_running = True
         self.app.engine.should_stop = False  # Reset cancellation token for fresh audit run
-        self._toggle_ui_state(tk.DISABLED)
+        self._toggle_ui_state(tk.DISABLED, is_audit=True)
         self.app.ui.widgets.log_text.delete(1.0, tk.END)
         
         # Set up standard active progress widgets

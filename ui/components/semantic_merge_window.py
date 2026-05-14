@@ -23,10 +23,11 @@ class SemanticMergeWindow:
         unique_sugs = {}
         for sug in raw_sugs:
             try:
-                c_idx = int(sug.get("index", -1))
+                idx_val = sug.get("index", -1)
+                c_idx = int(idx_val) if idx_val is not None else -1
                 if c_idx != -1:
                     unique_sugs[c_idx] = sug # Overwrites, securely keeping the latest instance
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
                 
         self.suggestions = [unique_sugs[k] for k in sorted(unique_sugs.keys())]
@@ -273,7 +274,8 @@ class SemanticMergeWindow:
         # Col 5: Reason, Severity & AI Confidence
         reason = item.get("reason", "")
         severity = item.get("severity", "").upper()
-        confidence = float(item.get("confidence", 1.0))
+        conf_val = item.get("confidence", 1.0)
+        confidence = float(conf_val) if conf_val is not None else 1.0
         
         sev_color = "#e74c3c" if "CRITICAL" in severity else "#f39c12"
         

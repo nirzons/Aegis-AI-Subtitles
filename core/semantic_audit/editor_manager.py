@@ -174,7 +174,7 @@ def get_or_create_editor_profile(
     if log_func:
         log_func(f"📥 [Hybrid Mastermind] Cache Miss. Compiling token-optimized profile with ONE-TIME LLM call...")
         
-    if not os.path.exists(sysprm_path):
+    if not sysprm_path or not os.path.exists(sysprm_path):
         raise FileNotFoundError(f"Sysprm configuration file not found at: {sysprm_path}")
         
     with open(sysprm_path, "r", encoding="utf-8") as f:
@@ -355,9 +355,12 @@ def audit_batch_with_editor(
             raise ValueError(f"No valid JSON found in Senior Editor response: {e}. Raw content: {raw_res}")
             
     # Fix: Coerce list hallucinations into the expected dictionary schema
-    if isinstance(parsed, list):
-        parsed = {"suggestions": parsed}
-        
+    if not isinstance(parsed, dict):
+        if isinstance(parsed, list):
+            parsed = {"suggestions": parsed}
+        else:
+            parsed = {"suggestions": []}
+            
     # Attach token telemetry for cost assessments later
     parsed["_telemetry"] = {
         "input_tokens": in_t,
