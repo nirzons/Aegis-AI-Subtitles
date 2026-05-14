@@ -3,7 +3,7 @@
 
 ![Aegis Dashboard](screenshots/dashboard.png)
 
-**Aegis AI Subtitles** is a professional-grade universal translation engine designed to bridge language gaps with surgical precision. Unlike standard translators, Aegis employs a multi-layered "Shield" architecture featuring automated auditing and AI-driven quality assurance to ensure every line is natural, accurate, and perfectly formatted across any language pair.
+**Aegis AI Subtitles** is an elite, professional-grade SRT localization suite engineered for premium multilingual translation with surgical precision. Embodying a multi-layered, resilient architecture, Aegis delivers automated, AI-driven primary translations calibrated to handle complex syntax and precise formatting across numerous language pairs. As an absolute quality safeguard, the workflow culminates in an offline **Senior Editor Audit System**, utilizing heavyweight model intelligence (DeepSeek-V3/R1 & GPT-4o) to sequentially audit overlapping context windows via an interactive human-in-the-loop visual Review Board and an idempotent, source-safe Merge Engine.
 
 ### 🔍 Interactive Monitoring
 With the built-in **Live Viewer**, you can audit the translation process in real-time, comparing the source text directly against the target language output.

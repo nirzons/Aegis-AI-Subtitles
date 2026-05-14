@@ -3,3 +3,4 @@ google-generativeai
 fastapi
 uvicorn[standard]
 websockets
+anthropic

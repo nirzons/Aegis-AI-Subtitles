@@ -8,6 +8,7 @@ RE_FALLBACK_JSON = re.compile(r'\{.*\}', re.DOTALL)
 from google import genai
 from google.genai import types
 from openai import OpenAI
+import anthropic
 
 from core.text_processing import pre_repair_json
 from core.llm._utils import _strip_markdown_fences, _supports_structured_output
@@ -78,6 +79,14 @@ def ping_model(model_cfg):
                 timeout=10
             )
             return True, "OK"
+        elif provider == "anthropic":
+            client = anthropic.Anthropic(api_key=api_key)
+            client.messages.create(
+                model=model_name,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}]
+            )
+            return True, "OK"
         else:
             # OpenAI / DeepSeek / Groq
             client = OpenAI(api_key=api_key or "sk-no-key-required", base_url=base_url or None)
@@ -107,12 +116,14 @@ from core.llm.providers.google import call_google
 from core.llm.providers.openai import call_openai
 from core.llm.providers.deepseek import call_deepseek
 from core.llm.providers.lmstudio import call_lmstudio
+from core.llm.providers.anthropic import call_anthropic
 
 _PROVIDER_REGISTRY = {
     'google': call_google,
     'openai': call_openai,
     'deepseek': call_deepseek,
     'lmstudio': call_lmstudio,
+    'anthropic': call_anthropic,
 }
 
 def call_llm(model_cfg, system_prompt, user_prompt, api_key, indices_list=None, is_judge=False, response_format=None, profile=None):

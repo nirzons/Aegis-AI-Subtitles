@@ -204,7 +204,7 @@ class SettingsWindow:
     def setup_api_keys(self):
         self.api_vars = {}
         row = 0
-        for provider in ["google", "openai", "deepseek", "lmstudio"]:
+        for provider in ["google", "openai", "deepseek", "anthropic", "lmstudio"]:
             ttk.Label(self.api_frame, text=f"{provider.capitalize()} API Key:").grid(row=row, column=0, padx=10, pady=10, sticky=tk.W)
             var = tk.StringVar(value=SETTINGS.config["api_keys"].get(provider, ""))
             self.api_vars[provider] = var
@@ -275,7 +275,7 @@ class SettingsWindow:
         ttk.Entry(form_frame, textvariable=self.edit_vars["name"], width=25).grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
         
         ttk.Label(form_frame, text="Provider:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        ttk.Combobox(form_frame, textvariable=self.edit_vars["provider"], values=["google", "openai", "deepseek", "lmstudio"], state="readonly", width=15).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Combobox(form_frame, textvariable=self.edit_vars["provider"], values=["google", "openai", "deepseek", "anthropic", "lmstudio"], state="readonly", width=15).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         ttk.Label(form_frame, text="Batch Size:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
         ttk.Entry(form_frame, textvariable=self.edit_vars["batch_size"], width=10).grid(row=1, column=3, sticky=tk.W, padx=5, pady=2)
         
