@@ -17,6 +17,8 @@ def run_semantic_polish_pipeline(
     context_size: int = 2,
     log_func = None,
     file_log_func = None,
+    progress_func = None,
+    check_stop_func = None,
     debug_mode: bool = False
 ) -> dict:
     """
@@ -78,6 +80,11 @@ def run_semantic_polish_pipeline(
     
     # 4. Run Sequential Processing Loop
     for idx, batch in enumerate(batches):
+        # Hot-Path Cancellation Safeguard
+        if check_stop_func and check_stop_func():
+            notify("🛑 Audit execution halted by Stop signal. Gracefully exiting...")
+            raise InterruptedError("Process aborted by user")
+
         batch_num = idx + 1
         active_chunk = batch["payload"].get("active_chunk", {})
         if not active_chunk:
@@ -135,6 +142,17 @@ def run_semantic_polish_pipeline(
         except Exception as e:
             notify(f"⚠️ Warning: Batch {batch_num} failed! Skipping to maintain pipeline integrity. Error: {e}")
             
+        # Live Real-Time Progress Callback
+        if progress_func:
+            in_rate = model_cfg.get("input_price", 0.0)
+            out_rate = model_cfg.get("output_price", 0.0)
+            billable_in = max(0, telemetry["input_tokens"] - telemetry["cached_tokens"])
+            live_cost = ((billable_in / 1_000_000.0) * in_rate) + ((telemetry["output_tokens"] / 1_000_000.0) * out_rate)
+            try:
+                progress_func(batch_num, total_batches, live_cost)
+            except Exception:
+                pass
+
         # Tiny cool-down to prevent flood triggers
         time.sleep(0.1)
         

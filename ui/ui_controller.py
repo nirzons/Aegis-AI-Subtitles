@@ -1,5 +1,8 @@
 import os
 import sys
+import time
+import threading
+import shutil
 import subprocess
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -257,7 +260,7 @@ class UIController:
                   self.app.ui.widgets.btn_restart, self.app.ui.widgets.btn_start, self.app.ui.widgets.btn_polish]:
             w.config(state=state)
         self.app.ui.widgets.btn_stop.config(state=tk.NORMAL if state == tk.DISABLED else tk.DISABLED)
-        self.app.ui.widgets.btn_open_translated.config(state=tk.NORMAL)
+        self.app.ui.widgets.btn_open_translated.config(state=state)
 
     def refresh_models_ui(self):
         model_list = [f"{k} - {v['name']} ({v['provider']})" for k, v in SETTINGS.config["models"].items()]
@@ -619,29 +622,63 @@ class UIController:
         source_path = os.path.join(self.app.english_subs_dir, srt_name)
         sysprm_path = os.path.join(self.app.sysprm_dir, sys_name)
             
-        # 3. Ask Consent
-        ans = messagebox.askyesno("Confirm Semantic Polish", 
+        # 3. Resolve User Configured Batch Size dynamically from the UI grid
+        raw_batch = self.app.ui.widgets.batch_size_var.get().strip()
+        try:
+            user_batch = int(raw_batch)
+        except ValueError:
+            user_batch = 40  # Safe engineering default
+            
+        if user_batch < 30:
+            ans = messagebox.askyesno("Small Batch Size Detected", 
+                f"⚠️ Senior Editor batch size is currently set to: {user_batch}\n\n"
+                f"Smaller batch sizes limit the model's contextual comprehension and can "
+                f"substantially increase API costs due to heavier block overlaps.\n\n"
+                f"💡 Recommendation: A batch size of 40 is strongly recommended for optimal distal caching.\n\n"
+                f"Are you sure you want to proceed with {user_batch}?", 
+                icon='warning', parent=self.app.root)
+            if not ans:
+                return
+
+        # 4. Ask Consent
+        ans = messagebox.askyesno("Confirm Senior Editor Audit", 
             f"Do you want to run a Senior Editor semantic audit on:\n'{output_filename}'?\n\n"
             f"💡 Heavyweight Auditor: {model_cfg['name']}\n"
-            f"💰 Estimated total cost: Less than $0.02 USD.\n\n"
-            f"The audit runs in the background and streams progress to the terminal.\n"
+            f"📦 Processing Batch Size: {user_batch}\n"
+            f"💰 Estimated total cost: Less than $0.03 USD.\n\n"
+            f"The audit operates asynchronously, compiling live ETAs and streaming results to the logs.\n"
             f"Proceed?", parent=self.app.root)
             
         if not ans:
             return
             
-        # 4. GUI Locking State
+        # 5. GUI Locking & Asynchronous Infrastructure Booting
         self.app.is_running = True
+        self.app.engine.should_stop = False  # Reset cancellation token for fresh audit run
         self._toggle_ui_state(tk.DISABLED)
         self.app.ui.widgets.log_text.delete(1.0, tk.END)
         
-        # Custom progress bar animation wrapper
-        self.app.ui.widgets.progress_bar.config(mode='indeterminate')
-        self.app.ui.widgets.progress_bar.start(15)
-        self.app.ui.widgets.lbl_progress.config(text="✨ Semantic Polish Running...")
+        # Set up standard active progress widgets
+        self.app.ui.widgets.progress_bar.config(mode='determinate')
+        self.app.ui.widgets.progress_var.set(0)
+        self.app.ui.widgets.lbl_progress.config(text="Progress: Compiling Caches 0/0 (0%)")
+        self.app.ui.widgets.lbl_eta.config(text="ETA: --:--")
+        self.app.ui.widgets.lbl_cost.config(text="Cost: $0.0000")
+        
+        # Mirror the standard translator status style in Terminal Header!
+        self.app.ui.widgets.lbl_status.config(text="🔍 AUDITING...", fg="#1abc9c")
+        
+        # Stream startup signal to connected Web Dashboard clients!
+        if self.app.ui.widgets.web_gui_var.get():
+            self.app.shared_state.set_running(True)
+            self.app.shared_state.update_status("🔍 AUDITING...", "#1abc9c")
+            self.app.shared_state.update_progress(0, 100)
+            self.app.shared_state.update_timer("")
         
         def background_audit_thread():
             try:
+                start_time = time.time()
+                
                 # Stream real-time logs straight into the UI terminal!
                 def app_log_bridge(msg):
                     from utils.app_utils import log
@@ -652,6 +689,34 @@ class UIController:
                     from utils.app_utils import file_log
                     file_log(self.app.session_log_file, msg)
                     
+                # Bridge running telemetry metrics back to Main GUI thread in real time
+                def app_progress_bridge(batch_num, total_batches, current_cost):
+                    elapsed = time.time() - start_time
+                    avg_time = elapsed / batch_num
+                    remaining = total_batches - batch_num
+                    eta_secs = int(avg_time * remaining)
+                    
+                    def _update_widgets():
+                        pct = int((batch_num / total_batches) * 100)
+                        self.app.ui.widgets.progress_var.set(pct)
+                        self.app.ui.widgets.lbl_progress.config(text=f"Progress: Batch {batch_num}/{total_batches} ({pct}%)")
+                        
+                        # Format runtime and cost telemetry
+                        m, s = divmod(eta_secs, 60)
+                        eta_str = f"{m:02d}:{s:02d}"
+                        self.app.ui.widgets.lbl_eta.config(text=f"ETA: {eta_str}")
+                        self.app.ui.widgets.lbl_cost.config(text=f"Cost: ${current_cost:.4f}")
+                        self.app.ui.widgets.lbl_status.config(text=f"🔍 AUDITING {batch_num}/{total_batches}...", fg="#1abc9c")
+                        
+                        # Stream real-time telemetry directly to Web Dashboard
+                        if self.app.ui.widgets.web_gui_var.get():
+                            self.app.shared_state.update_progress(batch_num, total_batches)
+                            self.app.shared_state.update_status(f"🔍 AUDITING {batch_num}/{total_batches}...", "#1abc9c")
+                            self.app.shared_state.update_eta(eta_str, "")
+                            self.app.shared_state.update_cost(current_cost, 0.0, display_text=f"Cost: ${current_cost:.4f}")
+                        
+                    self.app.root.after(0, _update_widgets)
+                    
                 app_log_bridge("🎬 Initiating Senior Editor Audit Execution Loop...")
                 
                 result = run_semantic_polish_pipeline(
@@ -660,27 +725,36 @@ class UIController:
                     sysprm_path=sysprm_path,
                     model_cfg=model_cfg,
                     api_key=api_key,
-                    batch_size=40,
+                    batch_size=user_batch, # DYNAMIC!
                     context_size=2,
                     log_func=app_log_bridge,
                     file_log_func=app_file_log_bridge,
+                    progress_func=app_progress_bridge, # LIVE CALLBACKS!
+                    check_stop_func=lambda: self.app.engine.should_stop, # ACTIVE CANCEL TOKEN!
                     debug_mode=self.app.ui.widgets.debug_var.get()
                 )
                 
                 # Fire callback on the main TKinter loop thread!
                 def on_success():
-                    self.app.ui.widgets.progress_bar.stop()
-                    self.app.ui.widgets.progress_bar.config(mode='determinate')
                     self.app.ui.widgets.lbl_progress.config(text="✨ Audit Complete.")
+                    self.app.ui.widgets.lbl_status.config(text="")  # Clear "Auditing" status
+                    self.app.ui.widgets.lbl_eta.config(text="ETA: --:--")
+                    
                     self.app.is_running = False
                     self._toggle_ui_state(tk.NORMAL)
                     
-                    # Alert and pop open the Markdown Report automatically!
+                    # Sync final state to Web Dashboard
+                    if self.app.ui.widgets.web_gui_var.get():
+                        self.app.shared_state.set_running(False)
+                        self.app.shared_state.update_status("Idle", "#7f8c8d")
+                        self.app.shared_state.update_eta("Completed", "")
+                    
+                    # Notify user of structural success
                     messagebox.showinfo("Audit Complete", 
                         f"✨ Senior Editor Audit Successful!\n\n"
                         f"• {result['suggestions_count']} improvements suggested.\n"
                         f"• Total Cost: ${result['estimated_cost_usd']:.5f}\n\n"
-                        f"Opening the generated Report now...", parent=self.app.root)
+                        f"The Side-by-Side Review Board is ready!", parent=self.app.root)
 
                     # Pop Open the Beautiful Semantic Review Board!
                     try:
@@ -693,30 +767,43 @@ class UIController:
                         )
                     except Exception as merge_err:
                         log(self.app.log_queue, self.app.session_log_file, f"⚠️ Visual Review Board launch failed: {merge_err}")
-
-                    # Auto-launch using default OS association with Notepad fallback
-                    try:
-                        full_report_path = os.path.abspath(result['report_file'])
-                        if os.path.exists(full_report_path):
-                            try:
-                                os.startfile(full_report_path)
-                            except OSError:
-                                # Fallback for systems without a default .md handler
-                                import subprocess
-                                subprocess.Popen(['notepad.exe', full_report_path])
-                    except Exception:
-                        pass
                         
                 self.app.root.after(0, on_success)
                 
             except Exception as e:
+                err_str = str(e)
+                # Classify whether this exception originated from User Stop Interruption or systemic failure
+                is_abort = isinstance(e, InterruptedError) or "aborted by user" in err_str
+                
                 def on_fail():
-                    self.app.ui.widgets.progress_bar.stop()
-                    self.app.ui.widgets.progress_bar.config(mode='determinate')
-                    self.app.ui.widgets.lbl_progress.config(text="❌ Semantic Polish Failed.")
-                    self.app.is_running = False
-                    self._toggle_ui_state(tk.NORMAL)
-                    messagebox.showerror("Audit Pipeline Failure", f"An error occurred during the pipeline run:\n\n{e}", parent=self.app.root)
+                    if is_abort:
+                        self.app.ui.widgets.lbl_progress.config(text="🛑 Audit Cancelled by User.")
+                        self.app.ui.widgets.lbl_status.config(text="") # Clear auditing tag
+                        self.app.ui.widgets.lbl_eta.config(text="ETA: --:--")
+                        self.app.is_running = False
+                        self._toggle_ui_state(tk.NORMAL)
+                        
+                        # Sync abort signal to Web Dashboard
+                        if self.app.ui.widgets.web_gui_var.get():
+                            self.app.shared_state.set_running(False)
+                            self.app.shared_state.update_status("Cancelled", "#e74c3c")
+                            self.app.shared_state.update_eta("Cancelled", "")
+                            
+                        messagebox.showwarning("Audit Interrupted", 
+                            "The Senior Editor semantic audit process has been cancelled and exited gracefully.", parent=self.app.root)
+                    else:
+                        self.app.ui.widgets.lbl_progress.config(text="❌ Semantic Polish Failed.")
+                        self.app.ui.widgets.lbl_status.config(text="") # Reset Header Label
+                        self.app.is_running = False
+                        self._toggle_ui_state(tk.NORMAL)
+                        
+                        # Sync failure signal to Web Dashboard
+                        if self.app.ui.widgets.web_gui_var.get():
+                            self.app.shared_state.set_running(False)
+                            self.app.shared_state.update_status("Failed", "#e74c3c")
+                            self.app.shared_state.update_eta("Failed", "")
+                            
+                        messagebox.showerror("Audit Pipeline Failure", f"An error occurred during the pipeline run:\n\n{err_str}", parent=self.app.root)
                     
                 self.app.root.after(0, on_fail)
 
@@ -791,6 +878,11 @@ class UIController:
                         # OVERWRITE target lines (Line 2+), preserving Cue & Timestamp
                         new_text = suggestions_map[cue_idx]
                         
+                        # Safety Catch: Apply deterministic mid-point split if text exceeds standard constraints without manual breaks
+                        if "\n" not in new_text and "<br>" not in new_text:
+                            from core.text_processing import force_split_overlong_line
+                            new_text = force_split_overlong_line(new_text)
+                            
                         # Re-apply OS/media-player specific RTL punctuation formatting!
                         if is_rtl:
                             new_text = fix_rtl(new_text, is_rtl=True, profile=profile)

@@ -45,9 +45,11 @@ Every potential improvement identified by the Senior Editor comes with an **AI C
 - **⚖️ Moderate/Low Confidence**: Rendered in slate grey. Typically indicates stylistic enhancements or contextual interpretations which merit manual user verification.
 
 You can utilize the **Confidence Threshold Control Panel** in the toolbar for hyper-efficient reviews:
-1. **Adjust the Cutoff**: Drag the **Confidence Threshold Slider** to your desired precision cutoff (e.g., `0.80` for standard broadcast quality).
-2. **👁️ Hide Below Threshold**: Instantly hides rows falling below the cutoff from the grid to declutter your viewport. *(Use the **Show All** button to reset visual visibility)*.
-3. **☑️ Select Above Threshold**: Bulk-checks all checkboxes that meet your minimum confidence standard while clearing the checkboxes for weaker suggestions, saving you dozens of manual clicks!
+1. **Adjust the Cutoff**: Drag the **Confidence Threshold Slider** to your desired precision cutoff. The dynamic status counter updates instantly, displaying exactly how many suggestions currently sit above and below your target confidence (e.g., `(Above: 24 | Below: 8)`).
+2. **👁️ Hide Below**: Instantly sweeps away any rows falling beneath your active cutoff to declutter your viewport and show only high-certainty recommendations.
+3. **👁️ Hide Above**: Instantly hides high-confidence recommendations, leaving **ONLY** items that fell below the threshold on-screen. This allows you to visually isolate and scrutinize tricky stylistic edge cases and lower-confidence nuances!
+4. **☑️ Select Above**: Bulk-ticks the checkboxes for all rows meeting or exceeding your confidence minimum while clearing checks for weaker suggestions, saving you dozens of manual clicks!
+5. **Show All**: Resets the filter completely, restoring instant visibility to every single suggestion in their original order.
 
 ### Step 4: The State-Protection Save
 Click **`💾 Apply Selected Fixes`**. Aegis protects your data with two crucial safety layers:

@@ -73,22 +73,27 @@ class SemanticMergeWindow:
         # UI Separator for clear visual grouping
         ttk.Separator(toolbar, orient='vertical').pack(side=tk.LEFT, fill='y', padx=15, pady=2)
         
-        # Threshold Slider & Label
+        # Threshold Slider, Value & Comparative Multi-Counts
         tk.Label(toolbar, text="Confidence Threshold:", font=("Segoe UI", 9, "bold"), fg="#2c3e50").pack(side=tk.LEFT)
         
         self.lbl_thresh_val = tk.Label(toolbar, text="0.80", font=("Segoe UI", 9, "bold"), width=4, fg="#2980b9")
+        self.lbl_thresh_stats = tk.Label(toolbar, text="(📈 0 | 📉 0)", font=("Segoe UI", 9, "italic", "bold"), fg="#7f8c8d")
         
         def _on_slider_move(val):
-            self.lbl_thresh_val.config(text=f"{float(val):.2f}")
+            f_val = float(val)
+            self.lbl_thresh_val.config(text=f"{f_val:.2f}")
+            self._update_confidence_stats(f_val)
             
-        scale = ttk.Scale(toolbar, from_=0.0, to=1.0, variable=self.threshold_var, command=_on_slider_move, length=130)
+        scale = ttk.Scale(toolbar, from_=0.0, to=1.0, variable=self.threshold_var, command=_on_slider_move, length=120)
         scale.pack(side=tk.LEFT, padx=5)
-        self.lbl_thresh_val.pack(side=tk.LEFT, padx=(0, 10))
+        self.lbl_thresh_val.pack(side=tk.LEFT, padx=(0, 2))
+        self.lbl_thresh_stats.pack(side=tk.LEFT, padx=(0, 12))
         
-        # User Requested Action Buttons
-        ttk.Button(toolbar, text="👁️ Hide Below Threshold", command=self._hide_below_threshold).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="☑️ Select Above Threshold", command=self._select_above_threshold).pack(side=tk.LEFT, padx=3)
-        ttk.Button(toolbar, text="Show All", command=self._show_all).pack(side=tk.LEFT, padx=3)
+        # Compact, Elegant Interaction Controls for Maximum Visual Flow
+        ttk.Button(toolbar, text="👁️ Hide Below", command=self._hide_below_threshold).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="👁️ Hide Above", command=self._hide_above_threshold).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="☑️ Select Above", command=self._select_above_threshold).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Show All", command=self._show_all).pack(side=tk.LEFT, padx=2)
         
         # 3. The Scrollable Grid Container
         table_container = ttk.Frame(self.top)
@@ -145,6 +150,9 @@ class SemanticMergeWindow:
         else:
             for idx, item in enumerate(self.suggestions):
                 self._add_row(idx, item)
+                
+            # Kick off initial count analytics once references are cached
+            self._update_confidence_stats()
                 
         # 5. Bottom Action Bar
         action_frame = ttk.Frame(self.top, padding=15)
@@ -281,6 +289,22 @@ class SemanticMergeWindow:
             ref = self.row_references.get(cue_idx)
             if ref and ref["confidence"] >= threshold:
                 ref["frame"].pack(fill=tk.X, pady=(0, 1))
+                
+    def _hide_above_threshold(self):
+        """
+        Hides all visually rendered subtitle rows from the scroll frame 
+        whose AI-assessed confidence level is strictly greater than or equal to the active threshold.
+        Allows operators to concentrate 100% on edge cases below the confidence floor.
+        """
+        threshold = self.threshold_var.get()
+        for ref in self.row_references.values():
+            ref["frame"].pack_forget()
+            
+        for item in self.suggestions:
+            cue_idx = str(item.get("index", ""))
+            ref = self.row_references.get(cue_idx)
+            if ref and ref["confidence"] < threshold:
+                ref["frame"].pack(fill=tk.X, pady=(0, 1))
 
     def _show_all(self):
         """
@@ -305,3 +329,36 @@ class SemanticMergeWindow:
                     var.set(True)
                 else:
                     var.set(False)
+
+    def _update_confidence_stats(self, val=None):
+        """
+        Runs live iterative tracking across datasets to accurately display the exact
+        number of items situated above and below the slider's current confidence cutoff.
+        """
+        try:
+            threshold = float(val) if val is not None else self.threshold_var.get()
+        except Exception:
+            return
+            
+        above = 0
+        below = 0
+        
+        # Utilize primary indexed row map if population complete
+        if self.row_references:
+            for ref in self.row_references.values():
+                if ref["confidence"] >= threshold:
+                    above += 1
+                else:
+                    below += 1
+        else:
+            # High-resiliency fallback to raw dictionaries if called prior to grid loading
+            for item in self.suggestions:
+                confidence = float(item.get("confidence", 1.0))
+                if confidence >= threshold:
+                    above += 1
+                else:
+                    below += 1
+                    
+        # Direct, safe UI push to standard readout labels
+        if hasattr(self, 'lbl_thresh_stats'):
+            self.lbl_thresh_stats.config(text=f"(📈 {above} | 📉 {below})")

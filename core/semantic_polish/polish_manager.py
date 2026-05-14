@@ -43,6 +43,7 @@ Your sole goal is to audit translated {target_name} subtitles against their orig
 1. Severe mistranslations or missed cultural idioms (e.g., translating "snow job" literally instead of its true meaning).
 2. Glossary violations (Failure to follow the canonical reference glossary provided below).
 3. Gender agreement mistakes based on context, character names, or dialogue flow.
+4. English Leaks: If the translator accidentally left/leaked raw English text in the Hebrew translation, you MUST translate it properly into Hebrew (Mark confidence as 1.0).
 
 ### PROJECT REFERENCE GLOSSARY & CHARACTERS ###
 🚨 **CRITICAL INSTRUCTION FOR YOU**: The reference dataset below contains the rules provided to the original translator. 
@@ -52,6 +53,9 @@ Your sole goal is to audit translated {target_name} subtitles against their orig
 --- START REFERENCE DATA ---
 {project_context_block}
 --- END REFERENCE DATA ---
+
+### LAYOUT GUIDELINE:
+- Try to match the general visual layout of the original subtitle. If a line contains an existing line-break (`\n` or `<br>`), attempt to preserve a natural, grammatically sensible line-break in your replacement text to prevent excessive line width.
 
 ### EXPLICIT SILENCE RULE:
 - If a translated line is culturally accurate, grammatically correct, and natural, do NOT flag it.

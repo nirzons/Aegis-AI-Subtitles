@@ -11,6 +11,7 @@ RE_TRAILING_COMMA_OBJ = re.compile(r',\s*\}')
 RE_TRAILING_COMMA_ARR = re.compile(r',\s*\]')
 RE_MISSING_COLON = re.compile(r'([{,])\s*"([^"\\:]+)"\s*(?=[,}\]])')
 RE_TRUNCATED_KEY = re.compile(r'([{,])\s*"[^"\\:]+"$')
+RE_HEBREW_ABBR_QUOTE = re.compile(r'([\u05d0-\u05ea])"([\u05d0-\u05ea])')
 RE_NON_PRINTABLE = re.compile(r'[\x00-\x1F\x7F]')
 RE_INVALID_ESCAPE = re.compile(r'\\(?![\\\"/bfnrtu])')
 RE_SDH_CLEANER = re.compile(r'\[.*?\]|\(.*?\)|♪|<.*?>|\{.*?\}')
@@ -140,6 +141,9 @@ def pre_repair_json(raw_res):
     # 2. Fix trailing commas in objects or arrays
     cleaned = RE_TRAILING_COMMA_OBJ.sub('}', cleaned)
     cleaned = RE_TRAILING_COMMA_ARR.sub(']', cleaned)
+    
+    # 2.1 Escape raw double-quotes in Hebrew abbreviations (Gershayim, e.g. ס"מ -> ס\"מ)
+    cleaned = RE_HEBREW_ABBR_QUOTE.sub(r'\1\\"\2', cleaned)
     
     # 3. Fix broken keys (Missing Colons/Values)
     # Search for a key (string) followed by a comma or bracket, without a colon before it.
