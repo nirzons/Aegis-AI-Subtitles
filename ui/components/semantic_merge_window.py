@@ -278,14 +278,12 @@ class SemanticMergeWindow:
         approved_indices = [idx for idx, var in self.check_vars.items() if var.get()]
         
         if not approved_indices:
-            ans = messagebox.askyesno("No Items Selected", "You haven't checked any improvements. Apply nothing and close?", parent=self.top)
+            ans = messagebox.askyesno("No Items Selected", "You haven't checked any improvements. Are you sure you want to revert all changes to the original file?", parent=self.top)
             if not ans:
                 return
             
         if self.on_apply:
             self.on_apply(approved_indices)
-            
-        self.top.destroy()
         
     def _hide_below_threshold(self):
         """

@@ -23,21 +23,8 @@ def merge_approved_suggestions(app, approved_indices, result, translated_path):
         backup_written = False
         
         if os.path.exists(backup_path):
-            ans = messagebox.askyesnocancel(
-                "Backup File Exists",
-                f"A backup version for this subtitle already exists:\n{os.path.basename(backup_path)}\n\n"
-                f"• Click [Yes] to OVERWRITE it with a fresh copy of the active file.\n"
-                f"• Click [No] to KEEP the existing backup and proceed with merging.\n"
-                f"• Click [Cancel] to abort the merging operation completely.",
-                parent=app.root
-            )
-            if ans is None: # User pressed Cancel
-                return
-            elif ans is True: # User pressed Yes (Overwrite)
-                shutil.copy2(translated_path, backup_path)
-                backup_written = True
-            else: # User pressed No (Keep Old)
-                pass
+            # Quietly keep the existing backup since it represents the pure original translation!
+            pass
         else:
             # Quietly write initial backup if none exists
             shutil.copy2(translated_path, backup_path)
@@ -50,8 +37,9 @@ def merge_approved_suggestions(app, approved_indices, result, translated_path):
             if str(sug.get("index")) in approved_indices
         }
         
-        # 3. Parse the original file block-by-block
-        with open(translated_path, "r", encoding="utf-8-sig") as f:
+        # 3. Parse the original file block-by-block (Always read from the pristine backup!)
+        source_read_path = backup_path if os.path.exists(backup_path) else translated_path
+        with open(source_read_path, "r", encoding="utf-8-sig") as f:
             raw = f.read()
         
         # Standardize linebreaks to match and split blocks securely
