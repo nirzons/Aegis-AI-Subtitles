@@ -5,6 +5,7 @@ from datetime import datetime
 
 from core.semantic_polish.batch_builder import build_semantic_polish_batches
 from core.semantic_polish.polish_manager import get_or_create_editor_profile, audit_batch_with_editor
+from core.semantic_polish.heuristic_verifier import verify_semantic_replacement
 
 def run_semantic_polish_pipeline(
     source_srt: str,
@@ -56,7 +57,14 @@ def run_semantic_polish_pipeline(
     total_batches = len(batches)
     notify(f"📋 Batch Builder created {total_batches} total batches.")
     
-    # 3. Initialize Sequential Audit Loop trackers
+    # 3. Pre-build Cue-to-English lookup table for layout validation & report enrichment
+    en_lookup = {}
+    for batch in batches:
+        active = batch["payload"].get("active_chunk", {})
+        for cue_id, data in active.items():
+            en_lookup[str(cue_id)] = data.get("en", "")
+
+    # 4. Initialize Sequential Audit Loop trackers
     all_suggestions = []
     telemetry = {
         "input_tokens": 0,
@@ -102,12 +110,27 @@ def run_semantic_polish_pipeline(
             
             # Collect validated suggestions
             suggestions = batch_res.get("suggestions", [])
-            # Filter out null or 0 confidence assertions to suppress noise
-            valid_suggestions = [s for s in suggestions if float(s.get("confidence", 1.0)) > 0.0]
-            all_suggestions.extend(valid_suggestions)
             
-            if valid_suggestions:
-                notify(f"✨ Found {len(valid_suggestions)} improvements in batch {batch_num}.")
+            # Filter step A: Strip zero-confidence suppressions
+            valid_suggestions = [s for s in suggestions if float(s.get("confidence", 1.0)) > 0.0]
+            
+            # Filter step B: Phase 1, Step 1.4 - The Heuristic Gatekeeper Audit
+            filtered_suggestions = []
+            for sug in valid_suggestions:
+                cue_idx = str(sug.get("index", ""))
+                en_text = en_lookup.get(cue_idx, "")
+                rep_text = sug.get("replacement_he", "")
+                
+                # Discard immediately if layout, line length or SDH constraints are broken
+                if verify_semantic_replacement(en_text, rep_text):
+                    filtered_suggestions.append(sug)
+                else:
+                    notify(f"🛡️ [Gatekeeper] Discarded invalid edit for Cue {cue_idx} (Broke layout/length constraints).")
+                    
+            all_suggestions.extend(filtered_suggestions)
+            
+            if filtered_suggestions:
+                notify(f"✨ Found {len(filtered_suggestions)} safe improvements in batch {batch_num}.")
                 
         except Exception as e:
             notify(f"⚠️ Warning: Batch {batch_num} failed! Skipping to maintain pipeline integrity. Error: {e}")
@@ -118,14 +141,7 @@ def run_semantic_polish_pipeline(
     # 5. Generate Execution Metrics & Cost Estimates
     duration = time.time() - pipeline_start
     
-    # Build a master Cue-to-English lookup table to enrich the Markdown report
-    en_lookup = {}
-    for batch in batches:
-        active = batch["payload"].get("active_chunk", {})
-        for cue_id, data in active.items():
-            en_lookup[str(cue_id)] = data.get("en", "")
-    
-    # Calculate simple estimated cost if rates exist in config
+    # 6. Calculate simple estimated cost if rates exist in config
     in_rate = model_cfg.get("input_price", 0.0)
     out_rate = model_cfg.get("output_price", 0.0)
     billable_in = max(0, telemetry["input_tokens"] - telemetry["cached_tokens"])
