@@ -256,9 +256,11 @@ class UIController:
     def _toggle_ui_state(self, state):
         for w in [self.app.ui.widgets.model_combo, self.app.ui.widgets.batch_entry, self.app.ui.widgets.srt_combo, 
                   self.app.ui.widgets.sysprm_combo, self.app.ui.widgets.judge_model_combo, self.app.ui.widgets.judge_batch_entry,
-                  self.app.ui.widgets.resume_combo, self.app.ui.widgets.btn_settings, self.app.ui.widgets.btn_manage_checkpoints,
-                  self.app.ui.widgets.btn_restart, self.app.ui.widgets.btn_start, self.app.ui.widgets.btn_polish]:
+                  self.app.ui.widgets.resume_combo]:
             w.config(state=state)
+        for btn in [self.app.ui.widgets.btn_settings, self.app.ui.widgets.btn_manage_checkpoints, 
+                  self.app.ui.widgets.btn_restart, self.app.ui.widgets.btn_start, self.app.ui.widgets.btn_audit]:
+            btn.config(state=state)
         self.app.ui.widgets.btn_stop.config(state=tk.NORMAL if state == tk.DISABLED else tk.DISABLED)
         self.app.ui.widgets.btn_open_translated.config(state=state)
 
@@ -540,21 +542,22 @@ class UIController:
     def stop_translation(self):
         if self.app.is_running:
             self.app.engine.request_stop()
-            log(self.app.log_queue, self.app.session_log_file, "🛑 Stop signal received. Finishing current batch...")
+            from utils.app_utils import log
+            log(self.app.log_queue, getattr(self.app, 'session_log_file', None), "🛑 Stop signal received. Finishing the active chunk before aborting to prevent data corruption...")
             self.app.ui.widgets.btn_stop.config(state=tk.DISABLED)
 
     def process_queues(self):
         self.queue_dispatcher.process_queues()
         self.app.root.after(100, self.process_queues)
 
-    def run_semantic_polish(self):
+    def run_semantic_audit(self):
         """
         Executes Phase 2, Step 2.1: Fires the background thread to audit 
-        the finalized translation with the Senior Editor semantic polish pipeline.
+        the finalized translation with the Senior Editor semantic audit pipeline.
         """
         import threading
         from tkinter import messagebox
-        from core.semantic_polish.pipeline import run_semantic_polish_pipeline
+        from core.semantic_audit.pipeline import run_semantic_audit_pipeline
         from utils.settings import SETTINGS
         
         if self.app.is_running:
@@ -612,6 +615,7 @@ class UIController:
         else:
             # Multiple files found! Prompt user to select exactly which one to audit.
             prompt_text = f"Multiple translated versions found for this SRT.\n\nPlease select which version you wish to Audit:"
+            from ui.components.file_selection_dialog import FileSelectionDialog
             dialog = FileSelectionDialog(self.app.root, "Select Translation Version", prompt_text, candidate_files)
             if not dialog.result:
                 # User cancelled
@@ -668,12 +672,18 @@ class UIController:
         # Mirror the standard translator status style in Terminal Header!
         self.app.ui.widgets.lbl_status.config(text="🔍 AUDITING...", fg="#1abc9c")
         
+        # Capture UI states safely on the main thread before launching background daemon!
+        self.app.engine.debug_mode = self.app.ui.widgets.debug_var.get()
+        
         # Stream startup signal to connected Web Dashboard clients!
         if self.app.ui.widgets.web_gui_var.get():
-            self.app.shared_state.set_running(True)
-            self.app.shared_state.update_status("🔍 AUDITING...", "#1abc9c")
-            self.app.shared_state.update_progress(0, 100)
-            self.app.shared_state.update_timer("")
+            try:
+                self.app.shared_state.set_running(True)
+                self.app.shared_state.update_status("🔍 AUDITING...", "#1abc9c")
+                self.app.shared_state.update_progress(0, 100)
+                self.app.shared_state.update_timer("")
+            except Exception:
+                pass
         
         def background_audit_thread():
             try:
@@ -690,16 +700,21 @@ class UIController:
                     file_log(self.app.session_log_file, msg)
                     
                 # Bridge running telemetry metrics back to Main GUI thread in real time
-                def app_progress_bridge(batch_num, total_batches, current_cost):
+                def app_progress_bridge(batch_num, total_batches, current_cost, processed_cues=None, total_cues=None):
                     elapsed = time.time() - start_time
                     avg_time = elapsed / batch_num
                     remaining = total_batches - batch_num
                     eta_secs = int(avg_time * remaining)
                     
                     def _update_widgets():
-                        pct = int((batch_num / total_batches) * 100)
-                        self.app.ui.widgets.progress_var.set(pct)
-                        self.app.ui.widgets.lbl_progress.config(text=f"Progress: Batch {batch_num}/{total_batches} ({pct}%)")
+                        if processed_cues is not None and total_cues is not None and total_cues > 0:
+                            pct = int((processed_cues / total_cues) * 100)
+                            self.app.ui.widgets.progress_var.set(pct)
+                            self.app.ui.widgets.lbl_progress.config(text=f"Progress: {processed_cues}/{total_cues} ({pct}%)")
+                        else:
+                            pct = int((batch_num / total_batches) * 100)
+                            self.app.ui.widgets.progress_var.set(pct)
+                            self.app.ui.widgets.lbl_progress.config(text=f"Progress: Batch {batch_num}/{total_batches} ({pct}%)")
                         
                         # Format runtime and cost telemetry
                         m, s = divmod(eta_secs, 60)
@@ -710,16 +725,22 @@ class UIController:
                         
                         # Stream real-time telemetry directly to Web Dashboard
                         if self.app.ui.widgets.web_gui_var.get():
-                            self.app.shared_state.update_progress(batch_num, total_batches)
-                            self.app.shared_state.update_status(f"🔍 AUDITING {batch_num}/{total_batches}...", "#1abc9c")
-                            self.app.shared_state.update_eta(eta_str, "")
-                            self.app.shared_state.update_cost(current_cost, 0.0, display_text=f"Cost: ${current_cost:.4f}")
+                            try:
+                                if processed_cues is not None and total_cues is not None and total_cues > 0:
+                                    self.app.shared_state.update_progress(processed_cues, total_cues)
+                                else:
+                                    self.app.shared_state.update_progress(batch_num, total_batches)
+                                self.app.shared_state.update_status(f"🔍 AUDITING {batch_num}/{total_batches}...", "#1abc9c")
+                                self.app.shared_state.update_eta(eta_str, "")
+                                self.app.shared_state.update_cost(current_cost, 0.0, display_text=f"Cost: ${current_cost:.4f}")
+                            except Exception:
+                                pass
                         
                     self.app.root.after(0, _update_widgets)
                     
                 app_log_bridge("🎬 Initiating Senior Editor Audit Execution Loop...")
                 
-                result = run_semantic_polish_pipeline(
+                result = run_semantic_audit_pipeline(
                     source_srt=source_path,
                     translated_srt=translated_path,
                     sysprm_path=sysprm_path,
@@ -731,7 +752,7 @@ class UIController:
                     file_log_func=app_file_log_bridge,
                     progress_func=app_progress_bridge, # LIVE CALLBACKS!
                     check_stop_func=lambda: self.app.engine.should_stop, # ACTIVE CANCEL TOKEN!
-                    debug_mode=self.app.ui.widgets.debug_var.get()
+                    debug_mode=lambda: getattr(self.app.engine, 'debug_mode', False)
                 )
                 
                 # Fire callback on the main TKinter loop thread!
@@ -745,9 +766,12 @@ class UIController:
                     
                     # Sync final state to Web Dashboard
                     if self.app.ui.widgets.web_gui_var.get():
-                        self.app.shared_state.set_running(False)
-                        self.app.shared_state.update_status("Idle", "#7f8c8d")
-                        self.app.shared_state.update_eta("Completed", "")
+                        try:
+                            self.app.shared_state.set_running(False)
+                            self.app.shared_state.update_status("Idle", "#7f8c8d")
+                            self.app.shared_state.update_eta("Completed", "")
+                        except Exception:
+                            pass
                     
                     # Notify user of structural success
                     messagebox.showinfo("Audit Complete", 
@@ -759,11 +783,12 @@ class UIController:
                     # Pop Open the Beautiful Semantic Review Board!
                     try:
                         from ui.components.semantic_merge_window import SemanticMergeWindow
+                        from core.semantic_audit.merger import merge_approved_suggestions
                         SemanticMergeWindow(
                             self.app.root, 
                             result, 
                             profile=profile,
-                            on_apply_callback=lambda approved: self.apply_polish_merges(approved, result, translated_path)
+                            on_apply_callback=lambda approved: merge_approved_suggestions(self.app, approved, result, translated_path)
                         )
                     except Exception as merge_err:
                         log(self.app.log_queue, self.app.session_log_file, f"⚠️ Visual Review Board launch failed: {merge_err}")
@@ -785,23 +810,29 @@ class UIController:
                         
                         # Sync abort signal to Web Dashboard
                         if self.app.ui.widgets.web_gui_var.get():
-                            self.app.shared_state.set_running(False)
-                            self.app.shared_state.update_status("Cancelled", "#e74c3c")
-                            self.app.shared_state.update_eta("Cancelled", "")
+                            try:
+                                self.app.shared_state.set_running(False)
+                                self.app.shared_state.update_status("Cancelled", "#e74c3c")
+                                self.app.shared_state.update_eta("Cancelled", "")
+                            except Exception:
+                                pass
                             
                         messagebox.showwarning("Audit Interrupted", 
                             "The Senior Editor semantic audit process has been cancelled and exited gracefully.", parent=self.app.root)
                     else:
-                        self.app.ui.widgets.lbl_progress.config(text="❌ Semantic Polish Failed.")
+                        self.app.ui.widgets.lbl_progress.config(text="❌ Semantic Audit Failed.")
                         self.app.ui.widgets.lbl_status.config(text="") # Reset Header Label
                         self.app.is_running = False
                         self._toggle_ui_state(tk.NORMAL)
                         
                         # Sync failure signal to Web Dashboard
                         if self.app.ui.widgets.web_gui_var.get():
-                            self.app.shared_state.set_running(False)
-                            self.app.shared_state.update_status("Failed", "#e74c3c")
-                            self.app.shared_state.update_eta("Failed", "")
+                            try:
+                                self.app.shared_state.set_running(False)
+                                self.app.shared_state.update_status("Failed", "#e74c3c")
+                                self.app.shared_state.update_eta("Failed", "")
+                            except Exception:
+                                pass
                             
                         messagebox.showerror("Audit Pipeline Failure", f"An error occurred during the pipeline run:\n\n{err_str}", parent=self.app.root)
                     
@@ -810,162 +841,4 @@ class UIController:
         # Execute background daemon thread!
         threading.Thread(target=background_audit_thread, daemon=True).start()
 
-    def apply_polish_merges(self, approved_indices, result, translated_path):
-        """
-        Phase 2, Step 2.3: Merges the user-approved senior editor fixes 
-        back into the actual translated SRT file on disk.
-        """
-        from tkinter import messagebox
-        import shutil
-        from core.text_processing import fix_rtl
-        from utils.settings import SETTINGS
-        
-        profile = SETTINGS.get_active_profile()
-        is_rtl = profile.target_is_rtl if profile else False
-        
-        if not approved_indices:
-            messagebox.showinfo("No Changes", "No changes were applied as no items were approved.", parent=self.app.root)
-            return
-            
-        try:
-            # 1. Create indestructible safety backup with state-protection check
-            backup_path = translated_path + ".bak"
-            backup_written = False
-            
-            if os.path.exists(backup_path):
-                ans = messagebox.askyesnocancel(
-                    "Backup File Exists",
-                    f"A backup version for this subtitle already exists:\n{os.path.basename(backup_path)}\n\n"
-                    f"• Click [Yes] to OVERWRITE it with a fresh copy of the active file.\n"
-                    f"• Click [No] to KEEP the existing backup and proceed with merging.\n"
-                    f"• Click [Cancel] to abort the merging operation completely.",
-                    parent=self.app.root
-                )
-                if ans is None: # User pressed Cancel
-                    return
-                elif ans is True: # User pressed Yes (Overwrite)
-                    shutil.copy2(translated_path, backup_path)
-                    backup_written = True
-                else: # User pressed No (Keep Old)
-                    pass
-            else:
-                # Quietly write initial backup if none exists
-                shutil.copy2(translated_path, backup_path)
-                backup_written = True
-            
-            # 2. Build fast mapping lookup for approved indices
-            suggestions_map = {
-                str(sug.get("index")): sug.get("replacement_he", "") 
-                for sug in result.get("suggestions", []) 
-                if str(sug.get("index")) in approved_indices
-            }
-            
-            # 3. Parse the original file block-by-block
-            with open(translated_path, "r", encoding="utf-8-sig") as f:
-                raw = f.read()
-            
-            # Standardize linebreaks to match and split blocks securely
-            content = raw.replace("\r\n", "\n")
-            blocks = [b.strip() for b in content.split('\n\n') if b.strip()]
-            new_blocks = []
-            merge_count = 0
-            
-            for b in blocks:
-                lines = b.split('\n')
-                if len(lines) >= 3:
-                    cue_idx = lines[0].strip()
-                    if cue_idx in suggestions_map:
-                        # OVERWRITE target lines (Line 2+), preserving Cue & Timestamp
-                        new_text = suggestions_map[cue_idx]
-                        
-                        # Safety Catch: Apply deterministic mid-point split if text exceeds standard constraints without manual breaks
-                        if "\n" not in new_text and "<br>" not in new_text:
-                            from core.text_processing import force_split_overlong_line
-                            new_text = force_split_overlong_line(new_text)
-                            
-                        # Re-apply OS/media-player specific RTL punctuation formatting!
-                        if is_rtl:
-                            new_text = fix_rtl(new_text, is_rtl=True, profile=profile)
-                            
-                        new_block = f"{cue_idx}\n{lines[1]}\n{new_text}"
-                        new_blocks.append(new_block)
-                        merge_count += 1
-                        continue
-                new_blocks.append(b)
-                
-            # 4. Ensure clean, pure \n across all blocks, then let Python handle OS native translation
-            final_content = "\n\n".join(new_blocks) + "\n"
-            # Strip existing \r to prevent double \r\r\n on Windows when written in text-mode
-            final_content = final_content.replace("\r\n", "\n").replace("\r", "")
-            
-            with open(translated_path, "w", encoding="utf-8-sig") as f:
-                f.write(final_content)
-                
-            # 5. Log and Display visual success summary!
-            log_msg = f"💾 [Merger] Merged {merge_count} Senior Editor fixes into {os.path.basename(translated_path)}!"
-            log(self.app.log_queue, self.app.session_log_file, log_msg)
-            
-            if backup_written:
-                log(self.app.log_queue, self.app.session_log_file, f"🛡️ [Merger] Safety backup updated at {os.path.basename(backup_path)}.")
-                backup_status_msg = f"• Backup written securely as:\n  {os.path.basename(backup_path)}"
-            else:
-                log(self.app.log_queue, self.app.session_log_file, f"🛡️ [Merger] Previous safety backup preserved intact.")
-                backup_status_msg = f"• Previous backup preserved securely on disk."
-                
-            messagebox.showinfo("Merge Successful", 
-                f"🎉 Merging Completed Successfully!\n\n"
-                f"• {merge_count} approved edits physically applied.\n"
-                f"{backup_status_msg}\n\n"
-                f"Your finalized SRT file is updated and ready for viewing!", parent=self.app.root)
-                
-        except Exception as e:
-            messagebox.showerror("Merging Failure", f"Failed to rewrite the SRT file:\n\n{e}", parent=self.app.root)
 
-
-class FileSelectionDialog(tk.Toplevel):
-    def __init__(self, parent, title, prompt, items):
-        """
-        Modal dialog allowing the user to pick exactly which translation version 
-        they want to Audit if multiple versions exist in the folder.
-        """
-        super().__init__(parent)
-        self.title(title)
-        self.geometry("500x300")
-        self.transient(parent)
-        self.grab_set()
-        
-        self.result = None
-        
-        lbl = tk.Label(self, text=prompt, wraplength=460, justify="left", font=("Segoe UI", 10), padx=15, pady=15)
-        lbl.pack(anchor="w")
-        
-        frame = ttk.Frame(self, padding=(15, 0, 15, 10))
-        frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.listbox = tk.Listbox(frame, font=("Segoe UI", 10), bg="#ffffff", selectbackground="#3498db", selectmode=tk.SINGLE)
-        sb = ttk.Scrollbar(frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscrollcommand=sb.set)
-        
-        for item in items:
-            self.listbox.insert(tk.END, item)
-            
-        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Pre-select first entry
-        self.listbox.select_set(0)
-        self.listbox.bind("<Double-Button-1>", lambda e: self._on_confirm())
-        
-        btn_frame = ttk.Frame(self, padding=15)
-        btn_frame.pack(fill=tk.X)
-        
-        ttk.Button(btn_frame, text="Select", command=self._on_confirm).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
-        
-        parent.wait_window(self)
-        
-    def _on_confirm(self):
-        sel = self.listbox.curselection()
-        if sel:
-            self.result = self.listbox.get(sel[0])
-        self.destroy()

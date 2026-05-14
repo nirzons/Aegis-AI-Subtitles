@@ -174,9 +174,17 @@ def get_or_create_editor_profile(
 
     ext_user = f"Condense the following raw translation instructions into a clean JSON Cast & Glossary sheet:\n\n{series_context}"
     
-    if debug_mode:
-        print(f"\n--- 🧪 [DEBUG] CONDENSER SYSTEM PROMPT ---\n{ext_system}\n--- 🧪 END ---")
-        print(f"\n--- 🧪 [DEBUG] CONDENSER USER PROMPT ---\n{ext_user}\n--- 🧪 END ---")
+    is_debug = debug_mode() if callable(debug_mode) else debug_mode
+    if is_debug:
+        log_msg_system = f"\n--- 🧪 [DEBUG] CONDENSER SYSTEM PROMPT ---\n{ext_system}\n--- 🧪 END ---\n"
+        log_msg_user = f"\n--- 🧪 [DEBUG] CONDENSER USER PROMPT ---\n{ext_user}\n--- 🧪 END ---\n"
+        
+        if file_log_func:
+            file_log_func(log_msg_system)
+            file_log_func(log_msg_user)
+        else:
+            print(log_msg_system)
+            print(log_msg_user)
         
     # Fire call to extract
     raw_res, in_t, out_t, cached_t, reasoning_t = call_llm(
@@ -214,7 +222,7 @@ def build_editor_user_prompt(batch_payload: dict) -> str:
         prompt_lines.append(json.dumps(context_before, ensure_ascii=False, indent=2))
         prompt_lines.append("")
         
-    prompt_lines.append("### [ACTIVE CHUNK TO AUDIT AND POLISH] ###")
+    prompt_lines.append("### [ACTIVE CHUNK TO AUDIT AND REFINE] ###")
     prompt_lines.append("Analyze the following lines carefully. These are the ONLY lines you are auditing and flagging for corrections:")
     prompt_lines.append(json.dumps(active_chunk, ensure_ascii=False, indent=2))
     prompt_lines.append("")
@@ -274,7 +282,8 @@ def audit_batch_with_editor(
         indices_str = f"{list(batch_idx.keys())[0]}-{list(batch_idx.keys())[-1]}" if batch_idx else "empty"
         log_func(f"⏳ [Senior Editor] Auditing batch (cues {indices_str})...")
         
-    if debug_mode:
+    is_debug = debug_mode() if callable(debug_mode) else debug_mode
+    if is_debug:
         log_msg_system = f"\n--- 🧪 [DEBUG] SENIOR EDITOR SYSTEM PROMPT START ---\n{system_prompt}\n--- 🧪 END SYSTEM PROMPT ---\n"
         log_msg_user = f"\n--- 🧪 [DEBUG] SENIOR EDITOR USER PROMPT START ---\n{user_prompt}\n--- 🧪 END USER PROMPT ---\n"
         
@@ -294,7 +303,7 @@ def audit_batch_with_editor(
         response_format=EDITOR_RESPONSE_SCHEMA if supports_structured else None
     )
     
-    if debug_mode:
+    if is_debug:
         log_msg_raw = f"\n--- 🧪 [DEBUG] SENIOR EDITOR RAW RESPONSE ---\n{raw_res}\n--- 🧪 END RAW RESPONSE ---\n"
         if file_log_func:
             file_log_func(log_msg_raw)

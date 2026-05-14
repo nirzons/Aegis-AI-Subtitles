@@ -3,11 +3,11 @@ import json
 import time
 from datetime import datetime
 
-from core.semantic_polish.batch_builder import build_semantic_polish_batches
-from core.semantic_polish.polish_manager import get_or_create_editor_profile, audit_batch_with_editor
-from core.semantic_polish.heuristic_verifier import verify_semantic_replacement
+from core.semantic_audit.batch_builder import build_semantic_audit_batches
+from core.semantic_audit.editor_manager import get_or_create_editor_profile, audit_batch_with_editor
+from core.semantic_audit.heuristic_verifier import verify_semantic_replacement
 
-def run_semantic_polish_pipeline(
+def run_semantic_audit_pipeline(
     source_srt: str,
     translated_srt: str,
     sysprm_path: str,
@@ -32,7 +32,7 @@ def run_semantic_polish_pipeline(
         if log_func:
             log_func(msg)
             
-    notify("🚀 [Senior Editor] Initializing Semantic Polish Pipeline...")
+    notify("🚀 [Senior Editor] Initializing Semantic Audit Pipeline...")
     
     # 1. Load/Compile Distilled .sneprf Profile (Hybrid Mastermind Check)
     try:
@@ -49,7 +49,7 @@ def run_semantic_polish_pipeline(
         
     # 2. Build Full Sequenced Batches
     notify("📦 Segmenting subtitle pairs into overlapping batches...")
-    batches = build_semantic_polish_batches(
+    batches = build_semantic_audit_batches(
         source_srt_path=source_srt,
         translated_srt_path=translated_srt,
         batch_size=batch_size,
@@ -58,6 +58,12 @@ def run_semantic_polish_pipeline(
     )
     total_batches = len(batches)
     notify(f"📋 Batch Builder created {total_batches} total batches.")
+    
+    total_cues = 0
+    if batches:
+        last_chunk = batches[-1].get("payload", {}).get("active_chunk", {})
+        if last_chunk:
+            total_cues = int(list(last_chunk.keys())[-1])
     
     # 3. Pre-build Cue-to-English lookup table for layout validation & report enrichment
     en_lookup = {}
@@ -149,7 +155,7 @@ def run_semantic_polish_pipeline(
             billable_in = max(0, telemetry["input_tokens"] - telemetry["cached_tokens"])
             live_cost = ((billable_in / 1_000_000.0) * in_rate) + ((telemetry["output_tokens"] / 1_000_000.0) * out_rate)
             try:
-                progress_func(batch_num, total_batches, live_cost)
+                progress_func(batch_num, total_batches, live_cost, int(end_cue), total_cues)
             except Exception:
                 pass
 
@@ -187,7 +193,7 @@ def run_semantic_polish_pipeline(
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(md_report)
         
-    notify(f"📁 A complete Polish Report written successfully to: {report_path}")
+    notify(f"📁 A complete Audit Report written successfully to: {report_path}")
     
     # Enrich all suggestions with resolved English original text for API consumers
     for sug in all_suggestions:
@@ -237,7 +243,7 @@ def generate_markdown_report(translated_basename, model_name, duration, suggesti
             
     table_block = "\n".join(table_rows)
     
-    md = f"""# 🔍 Senior Editor Post-Polish Report
+    md = f"""# 🔍 Senior Editor Post-Audit Report
 
 *   **Project Target File:** `{translated_basename}.srt`
 *   **Timestamp Executed:** `{timestamp}`

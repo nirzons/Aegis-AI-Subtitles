@@ -10,7 +10,7 @@ def load_srt_content(srt_path):
     with open(srt_path, 'r', encoding='utf-8-sig') as f:
         return f.read()
 
-def build_semantic_polish_batches(
+def build_semantic_audit_batches(
     source_srt_path: str,
     translated_srt_path: str,
     batch_size: int = 40,
@@ -51,7 +51,7 @@ def build_semantic_polish_batches(
         context_after_indices = ordered_indices[chunk_end : min(chunk_end + context_size, total_indices)]
         
         # Construct the combined structured dictionary for prompt population
-        # Separated into distinct keys so that polish_manager can format the prompt cleanly
+        # Separated into distinct keys so that editor_manager can format the prompt cleanly
         batch_data = {
             "batch_index": len(batches),
             "active_indices": active_indices,

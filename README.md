@@ -75,8 +75,8 @@ Aegis uses a dynamic profile system (`core/language_profiles.py`) that automatic
 ### 3. The Heuristic Shield
 A deterministic auditor (`core/audit_manager.py` & `core/text_processing.py`) that runs before any AI check. It catches "leaks" (like speaker names `JEFF:`) or lines that are physically too long. During retries, it injects the **exact offending word** into the feedback loop to force compliance.
 
-### 4. The Senior Editor Polish Loop
-An offline proofreading system (`core/semantic_polish/`) that operates completely independent of the translation thread. It features the **Hybrid Mastermind** for distilling massive system instructions into persistent token-lean cache files (`editor_profiles/`), sequentially audits overlapping segments to bypass rate limits, and applies physical merges protected by a state-preserving backup vault and custom RTL punctuation repair.
+### 4. The Senior Editor Audit Loop
+An offline proofreading system (`core/semantic_audit/`) that operates completely independent of the translation thread. It features the **Hybrid Mastermind** for distilling massive system instructions into persistent token-lean cache files (`editor_profiles/`), sequentially audits overlapping segments to bypass rate limits, and applies physical merges protected by a state-preserving backup vault and custom RTL punctuation repair.
 
 ---
 

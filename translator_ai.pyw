@@ -104,7 +104,7 @@ class TranslatorApp:
         self.start_translation = self.ui_controller.start_translation
         self.stop_translation = self.ui_controller.stop_translation
         self.process_queues = self.ui_controller.process_queues
-        self.run_semantic_polish = self.ui_controller.run_semantic_polish
+        self.run_semantic_audit = self.ui_controller.run_semantic_audit
 
 
         self.ui = MainUILayout(self.root)
@@ -319,7 +319,7 @@ if __name__ == "__main__":
                     'source_combo', 'target_combo', 'model_combo', 'srt_combo', 
                     'sysprm_combo', 'judge_model_combo', 'resume_combo',
                     'native_instr_var', 'debug_var', 'web_gui_var', 
-                    'bypass_intervention_var', 'progress_bar', 'log_text', 'btn_polish'
+                    'bypass_intervention_var', 'progress_bar', 'log_text', 'btn_audit'
                 ]
                 for attr in required_widgets:
                     if not hasattr(app.ui.widgets, attr):

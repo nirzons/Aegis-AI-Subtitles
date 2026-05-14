@@ -118,8 +118,8 @@ class MainUILayout:
         self.widgets.btn_open_translated.pack(side=tk.LEFT, padx=5)
 
         # Renamed 'Polish' to 'Audit' to eliminate semantic double-meaning
-        self.widgets.btn_polish = ttk.Button(ctrl_frame, text="✨ Audit", command=app.run_semantic_polish, state=tk.NORMAL)
-        self.widgets.btn_polish.pack(side=tk.LEFT, padx=5)
+        self.widgets.btn_audit = ttk.Button(ctrl_frame, text="✨ Audit", command=app.run_semantic_audit, state=tk.NORMAL)
+        self.widgets.btn_audit.pack(side=tk.LEFT, padx=5)
 
         # 3. Status & Progress Frame
         progress_header = tk.Frame(self.root, bg=self.root["bg"])

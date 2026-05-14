@@ -11,13 +11,27 @@ class SemanticMergeWindow:
         
         Args:
             parent: The TKinter parent window.
-            audit_data: The dict object returned by run_semantic_polish_pipeline.
+            audit_data: The dict object returned by run_semantic_audit_pipeline.
             profile: The current LanguageProfile.
             on_apply_callback: Function that receives the list of approved suggestions.
         """
         self.parent = parent
         self.audit_data = audit_data or {}
-        self.suggestions = self.audit_data.get("suggestions", [])
+        
+        # Deduplicate and sort the LLM suggestions strictly by integer cue index
+        raw_sugs = self.audit_data.get("suggestions", [])
+        unique_sugs = {}
+        for sug in raw_sugs:
+            try:
+                c_idx = int(sug.get("index", -1))
+                if c_idx != -1:
+                    unique_sugs[c_idx] = sug # Overwrites, securely keeping the latest instance
+            except ValueError:
+                pass
+                
+        self.suggestions = [unique_sugs[k] for k in sorted(unique_sugs.keys())]
+        self.audit_data["suggestions"] = self.suggestions # Sync back to ensure merger applies exact match
+        
         self.profile = profile
         self.on_apply = on_apply_callback
         

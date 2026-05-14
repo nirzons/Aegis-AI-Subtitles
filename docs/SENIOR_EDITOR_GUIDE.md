@@ -70,7 +70,7 @@ For the ultimate balance between elite accuracy and operating costs, follow thes
 
 ---
 
-## 📁 Auto-Generated Polish Reports
+## 📁 Auto-Generated Audit Reports
 Alongside the visual GUI, the Senior Editor automatically archives a highly readable Markdown report inside the dedicated reports folder:
 `Audit reports/[Filename]_SENIOR_EDITOR_REPORT.md`
 
