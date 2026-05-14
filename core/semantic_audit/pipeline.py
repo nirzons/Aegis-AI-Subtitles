@@ -88,8 +88,8 @@ def run_semantic_audit_pipeline(
     for idx, batch in enumerate(batches):
         # Hot-Path Cancellation Safeguard
         if check_stop_func and check_stop_func():
-            notify("🛑 Audit execution halted by Stop signal. Gracefully exiting...")
-            raise InterruptedError("Process aborted by user")
+            notify("🛑 Audit execution halted by Stop signal. Salvaging partial results...")
+            break
 
         batch_num = idx + 1
         active_chunk = batch["payload"].get("active_chunk", {})

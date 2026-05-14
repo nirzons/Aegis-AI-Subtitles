@@ -13,9 +13,7 @@ def merge_approved_suggestions(app, approved_indices, result, translated_path):
     profile = SETTINGS.get_active_profile()
     is_rtl = profile.target_is_rtl if profile else False
     
-    if not approved_indices:
-        messagebox.showinfo("No Changes", "No changes were applied as no items were approved.", parent=app.root)
-        return
+    # Removed early return for empty approved_indices to allow safe restoration from .bak
         
     try:
         # 1. Create indestructible safety backup with state-protection check

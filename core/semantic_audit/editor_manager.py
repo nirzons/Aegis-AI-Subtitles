@@ -329,6 +329,10 @@ def audit_batch_with_editor(
         else:
             raise ValueError(f"No valid JSON found in Senior Editor response: {e}. Raw content: {raw_res}")
             
+    # Fix: Coerce list hallucinations into the expected dictionary schema
+    if isinstance(parsed, list):
+        parsed = {"suggestions": parsed}
+        
     # Attach token telemetry for cost assessments later
     parsed["_telemetry"] = {
         "input_tokens": in_t,
