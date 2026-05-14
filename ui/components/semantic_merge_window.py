@@ -157,16 +157,48 @@ class SemanticMergeWindow:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 4. Populate Rows
+        # 4. Populate Rows (High-Speed Progressive Streaming Engine to prevent UI Lockup)
         if not self.suggestions:
             empty_lbl = tk.Label(self.scroll_frame, text="🎉 No critical issues or suggestions found! Your subtitle file is immaculate.", font=("Segoe UI", 12, "italic"), bg="#f4f7f9", fg="#7f8c8d", pady=50)
             empty_lbl.pack(fill=tk.BOTH, expand=True)
         else:
-            for idx, item in enumerate(self.suggestions):
-                self._add_row(idx, item)
+            # Instantiating thousands of Tkinter widgets at once freezes Tcl. 
+            # We stream them in fast async batches!
+            self.loading_lbl = tk.Label(self.scroll_frame, text=f"⏳ Streaming {len(self.suggestions)} suggestions to Review Board... (0%)", font=("Segoe UI", 11, "bold"), bg="#f4f7f9", fg="#2980b9", pady=25)
+            self.loading_lbl.pack(fill=tk.X)
+            
+            self._current_load_idx = 0
+            self._load_batch_size = 20 # Highly responsive chunk limit
+            
+            def _load_chunk():
+                try:
+                    if not self.top.winfo_exists():
+                        return
+                except Exception:
+                    return # Window closed during streaming
+                    
+                end_idx = min(self._current_load_idx + self._load_batch_size, len(self.suggestions))
+                for i in range(self._current_load_idx, end_idx):
+                    self._add_row(i, self.suggestions[i])
+                    
+                self._current_load_idx = end_idx
+                pct = int((self._current_load_idx / len(self.suggestions)) * 100)
                 
-            # Kick off initial count analytics once references are cached
-            self._update_confidence_stats()
+                try:
+                    self.loading_lbl.config(text=f"⏳ Streaming suggestions into Review Board... {self._current_load_idx}/{len(self.suggestions)} ({pct}%)")
+                    
+                    if self._current_load_idx < len(self.suggestions):
+                        # Schedule next fast chunk
+                        self.top.after(1, _load_chunk)
+                    else:
+                        # Render complete! Remove placeholder and compute analytics.
+                        self.loading_lbl.pack_forget()
+                        self._update_confidence_stats()
+                except Exception:
+                    pass
+                    
+            # Kickoff asynchronous UI builder thread pump after a brief 50ms window boot!
+            self.top.after(50, _load_chunk)
                 
         # 5. Bottom Action Bar
         action_frame = ttk.Frame(self.top, padding=15)

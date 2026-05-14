@@ -13,7 +13,7 @@ RE_MISSING_COLON = re.compile(r'([{,])\s*"([^"\\:]+)"\s*(?=[,}\]])')
 RE_TRUNCATED_KEY = re.compile(r'([{,])\s*"[^"\\:]+"$')
 RE_HEBREW_ABBR_QUOTE = re.compile(r'([\u05d0-\u05ea])"([\u05d0-\u05ea])')
 RE_NON_PRINTABLE = re.compile(r'[\x00-\x1F\x7F]')
-RE_INVALID_ESCAPE = re.compile(r'\\(?![\\\"/bfnrtu])')
+RE_INVALID_ESCAPE = re.compile(r'(\\["\\/bfnrtu]|\\u[0-9a-fA-F]{4})|\\')
 RE_SDH_CLEANER = re.compile(r'\[.*?\]|\(.*?\)|♪|<.*?>|\{.*?\}')
 # RE_FOREIGN_CHARS: Matches characters that are neither standard ASCII nor within the target language range.
 # This is used for heuristic validation and cleanup.
@@ -145,6 +145,14 @@ def pre_repair_json(raw_res):
     # 2.1 Escape raw double-quotes in Hebrew abbreviations (Gershayim, e.g. ס"מ -> ס\"מ)
     cleaned = RE_HEBREW_ABBR_QUOTE.sub(r'\1\\"\2', cleaned)
     
+    # 2.2 Smart Schema-Aware Double-Quote Hardening
+    # Finds known text fields and escapes unescaped inner double quotes that break JSON structure.
+    for key in ["current_he", "replacement_he", "reason"]:
+        pattern = rf'("{key}"\s*:\s*")(.*?)("\s*(?=,\s*"(?:index|current_he|replacement_he|reason|severity|confidence)"|\s*}}))'
+        def escape_inner(match):
+            return match.group(1) + re.sub(r'(?<!\\)"', r'\\"', match.group(2)) + match.group(3)
+        cleaned = re.sub(pattern, escape_inner, cleaned, flags=re.DOTALL)
+    
     # 3. Fix broken keys (Missing Colons/Values)
     # Search for a key (string) followed by a comma or bracket, without a colon before it.
     # Pattern: (Start of object or comma) + whitespace + "key" + whitespace + (?= comma or end-brace)
@@ -172,8 +180,12 @@ def pre_repair_json(raw_res):
         cleaned += '}' * max(0, open_braces)
 
 
-    # 5. Fix invalid escape sequences: Turn backslashes into literals if they don't precede a valid JSON escape character.
-    cleaned = RE_INVALID_ESCAPE.sub(r'\\\\', cleaned)
+    # 5. Fix invalid escape sequences: Keep valid JSON escapes untouched, escape any lone backslashes.
+    def _escape_replacer(match):
+        if match.group(1):
+            return match.group(1)
+        return r'\\'
+    cleaned = RE_INVALID_ESCAPE.sub(_escape_replacer, cleaned)
     
     # 6. Clean non-printable and control characters
     cleaned = RE_NON_PRINTABLE.sub('', cleaned)

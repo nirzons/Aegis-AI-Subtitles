@@ -34,6 +34,16 @@ def build_editor_system_prompt(sysprm_data: dict = None, editor_profile_text: st
         series_context_list = sysprm_data.get("series_context", [])
         project_context_block = "\n".join(series_context_list) if series_context_list else "No specific project glossary provided."
 
+    # 2.5 Determine Dynamic Targeting Rules
+    gender_rule_block = ""
+    if tgt_code.lower() in ["he", "ar"]:
+        gender_rule_block = """
+### GENDER DETERMINATION RULES:
+- NEVER suggest double-gender slashed forms (e.g., 'מפחד/ת', 'הולך/ת'). Screen characters do not speak in slashed forms.
+- You MUST decisively choose either male or female based on context.
+- If you cannot determine gender from context, **do NOT flag the line**—leave the original translation completely untouched.
+"""
+
     # 3. Construct Dynamic Prompt
     prompt = f"""You are a Senior {target_name} Localization Editor for high-stakes TV broadcasting, specializing in premium subtitle translation.
 
@@ -57,11 +67,26 @@ Your sole goal is to audit translated {target_name} subtitles against their orig
 ### LAYOUT GUIDELINE:
 - Try to match the general visual layout of the original subtitle. If a line contains an existing line-break (`\n` or `<br>`), attempt to preserve a natural, grammatically sensible line-break in your replacement text to prevent excessive line width.
 
+### SDH & SOUND DESCRIPTIONS:
+- If the main translator stripped out SDH sound descriptions in parentheses or brackets (e.g. `(laughter)`, `[sighs]`), this is NOT an error. Do NOT flag it as a missing translation.
+- If you must correct a line that contains sound descriptions, **NEVER restore or translate the sounds**. Leave the sounds excluded to match the clean, soundless translation style.
+
+### SPEAKER NAMES & SPEECH TAGS:
+- If the main translator stripped out speaker name prefixes or speech tags (e.g., `PROBST:`, `JONATHAN:`), this is NOT an error. Do NOT flag it as a missing translation.
+- If you must correct a line that contains speaker tags, **NEVER restore or translate the speaker names**. Leave the speaker names excluded, matching the translator's clean, speech-tag-free style.
+
+{gender_rule_block}
 ### EXPLICIT SILENCE RULE:
 - If a translated line is culturally accurate, grammatically correct, and natural, do NOT flag it.
 - DO NOT suggest changes for minor stylistic differences, synonyms, or personal taste. 
 - Avoid stylistic pedantry. We only want high-impact, high-confidence fixes.
 - If you find NO errors in a batch, your output 'suggestions' list MUST BE EMPTY [].
+- **CRITICAL**: Before adding a suggestion to the list, compare your final 'replacement_he' with 'current_he'. If they are identical (meaning your proposed fix resulted in the exact same text as the original), you **MUST** discard it and **MUST NOT** include this cue in your suggestions.
+
+
+
+### CRITICAL PROHIBITED CHARACTERS:
+- **NEVER use raw double quotes (`"`)** inside your string values (especially inside the `reason` field). If you need to quote something or provide examples, use single quotes (`'`) instead. This prevents JSON syntax corruption.
 
 ### RESPONSE FORMAT:
 You must respond EXACTLY in the specified JSON Schema format.

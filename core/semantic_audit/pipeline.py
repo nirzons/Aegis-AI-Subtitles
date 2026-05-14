@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 from datetime import datetime
@@ -6,6 +7,7 @@ from datetime import datetime
 from core.semantic_audit.batch_builder import build_semantic_audit_batches
 from core.semantic_audit.editor_manager import get_or_create_editor_profile, audit_batch_with_editor
 from core.semantic_audit.heuristic_verifier import verify_semantic_replacement
+from core.text_processing import RE_SDH_BRACKETS, RE_ENGLISH_WORDS, RE_EXEMPT_ACRONYM, RE_EXEMPT_SPELLED
 
 def run_semantic_audit_pipeline(
     source_srt: str,
@@ -133,9 +135,50 @@ def run_semantic_audit_pipeline(
                 cue_idx = str(sug.get("index", ""))
                 en_text = en_lookup.get(cue_idx, "")
                 rep_text = sug.get("replacement_he", "")
+                curr_he = sug.get("current_he", "")
+                
+                # 🛡️ Discard immediately if the proposed replacement is identical to the current text (No physical change)
+                if rep_text.strip() == curr_he.strip():
+                    notify(f"🛡️ [Gatekeeper] Purged no-op suggestion for Cue {cue_idx} (Replacement is identical to current text).")
+                    continue
                 
                 # Discard immediately if layout, line length or SDH constraints are broken
                 if verify_semantic_replacement(en_text, rep_text):
+                    # 🛡️ User's Unified Adaptive Confidence Penalty Block
+                    curr_he = str(curr_he)
+
+                    penalize = False
+                    reasons_to_add = []
+                    
+                    # A. Restored SDH Check
+                    if RE_SDH_BRACKETS.search(rep_text) and not RE_SDH_BRACKETS.search(curr_he):
+                        penalize = True
+                        reasons_to_add.append("Restored SDH/Sound cue detected")
+                        
+                    # B. Foreign Characters / English Leak Check (Legacy heuristics adapted for auditor)
+                    # First, strip formatting tags to avoid false positives:
+                    # 1. HTML tags (<i>, <b>, <u>, <font>, <br>)
+                    text_for_char_check = re.sub(r'<[^>]+>', ' ', rep_text)
+                    # 2. ASS curly bracket overrides ({\an8}, {\pos}, etc.)
+                    text_for_char_check = re.sub(r'\{[^{}]+\}', ' ', text_for_char_check)
+                    # 3. Backslash control characters (\N, \n, \h)
+                    text_for_char_check = re.sub(r'\\[nNhH]', ' ', text_for_char_check)
+                    
+                    found_eng = RE_ENGLISH_WORDS.findall(text_for_char_check)
+                    if found_eng:
+                        actual_errors = [w for w in found_eng if not (RE_EXEMPT_ACRONYM.fullmatch(w) or RE_EXEMPT_SPELLED.search(w))]
+                        if actual_errors:
+                            penalize = True
+                            reasons_to_add.append(f"Foreign Characters detected ({', '.join(set(actual_errors))})")
+                            
+                    if penalize:
+                        orig_conf = float(sug.get("confidence", 1.0))
+                        new_conf = round(orig_conf * 0.7, 2) # ✂️ Penalized to drop below threshold
+                        sug["confidence"] = new_conf
+                        warning_str = " ".join([f"[⚠ WARNING: {r}]" for r in reasons_to_add])
+                        sug["reason"] = f"{sug.get('reason', '')} {warning_str}".strip()
+                        notify(f"⚠️ [Gatekeeper] Penalized confidence for Cue {cue_idx} ({orig_conf} ➡️ {new_conf}) due to: {'; '.join(reasons_to_add)}.")
+                        
                     filtered_suggestions.append(sug)
                 else:
                     notify(f"🛡️ [Gatekeeper] Discarded invalid edit for Cue {cue_idx} (Broke layout/length constraints).")
@@ -230,7 +273,7 @@ def generate_markdown_report(translated_basename, model_name, duration, suggesti
             # Safe-escape markdown pipes if present inside text to prevent breaking table rows
             safe_curr = str(sug.get("current_he", "")).replace("|", "\\|").replace("\n", "<br>")
             safe_repl = str(sug.get("replacement_he", "")).replace("|", "\\|").replace("\n", "<br>")
-            safe_reason = str(sug.get("reason", "")).replace("|", "\\|")
+            safe_reason = str(sug.get("reason", "")).replace("|", "\\|").replace("\n", "<br>")
             safe_en = str(en_text).replace("|", "\\|").replace("\n", "<br>")
             
             severity = sug.get("severity", "CRITICAL")

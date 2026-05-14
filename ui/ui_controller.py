@@ -563,12 +563,20 @@ class UIController:
         if self.app.is_running:
             return
             
-        # 1. State Gathering
+        # 1. State Gathering & Mode Branching
         srt_name = self.app.ui.widgets.srt_var.get()
         sys_name = self.app.ui.widgets.sysprm_var.get()
         
-        if not srt_name or not sys_name:
-            messagebox.showerror("File Selection Error", "Please select both an SRT File and a SysPrm profile first.", parent=self.app.root)
+        # 🚀 ARCHITECTURAL HOOK: If no subtitle is loaded, trigger Historical Rescue Loader!
+        if not srt_name:
+            from core.semantic_audit.historical_loader import execute_historical_rescue_flow
+            workspace_root = os.path.abspath('.')
+            execute_historical_rescue_flow(self.app.root, workspace_root, self.app)
+            return
+            
+        # Normal live audit validation
+        if not sys_name:
+            messagebox.showerror("Live Audit Error", "Please select a SysPrm profile to execute a live audit.", parent=self.app.root)
             return
             
         # 2. Dynamic Output File Path Discovery
@@ -589,40 +597,54 @@ class UIController:
         base_name = srt_name.replace('.srt', '')
         target_suffix = f"_{profile.target_lang_code}.srt"
         
-        candidate_files = []
+        candidate_paths = []
         try:
             if os.path.exists(self.app.output_dir):
                 for f in os.listdir(self.app.output_dir):
                     # Pattern match: [source_basename]_*_[target_lang].srt
                     if f.startswith(base_name) and f.endswith(target_suffix):
-                        candidate_files.append(f)
+                        candidate_paths.append(os.path.join(self.app.output_dir, f))
         except Exception:
             pass
             
-        output_filename = None
+        # 🛰️ SMART WORKSPACE FALLBACK: If empty, recursively crawl the workspace root for the match!
+        if not candidate_paths:
+            try:
+                workspace_root = getattr(self.app, 'curr_dir', os.path.abspath('.'))
+                for root_dir, _, files in os.walk(workspace_root):
+                    # Skip cache/tmp/system folders to remain fast
+                    if any(ex in root_dir for ex in ['.checkpoints', 'editor_profiles', '.git', '__pycache__', 'logs']):
+                        continue
+                    for f in files:
+                        if f.startswith(base_name) and f.endswith(target_suffix):
+                            candidate_paths.append(os.path.join(root_dir, f))
+            except Exception:
+                pass
+
+        output_path = None
         
-        if len(candidate_files) == 0:
-            # Expected default if nothing else exists
-            fallback_name = base_name + f'_{model_cfg["name"]}_{profile.target_lang_code}.srt'
+        if len(candidate_paths) == 0:
             messagebox.showerror("Output Not Found", 
-                f"Could not find any translated file for '{srt_name}' in output folder.\n\n"
+                f"Could not find any translated file for '{srt_name}' in output folder or workspace.\n\n"
+                f"Searched Output Folder: '{os.path.abspath(self.app.output_dir)}'\n"
                 f"Expected pattern: {base_name}_*{target_suffix}", parent=self.app.root)
             return
             
-        elif len(candidate_files) == 1:
-            output_filename = candidate_files[0]
+        elif len(candidate_paths) == 1:
+            output_path = candidate_paths[0]
             
         else:
-            # Multiple files found! Prompt user to select exactly which one to audit.
-            prompt_text = f"Multiple translated versions found for this SRT.\n\nPlease select which version you wish to Audit:"
+            # Multiple files found! Generate unique display strings mapped to full paths
+            # Use absolute paths in the mapping to avoid any ambiguity
+            filename_to_path = {os.path.basename(p): p for p in candidate_paths}
+            prompt_text = f"Multiple translated versions found for this SRT in workspace.\n\nPlease select which version you wish to Audit:"
             from ui.components.file_selection_dialog import FileSelectionDialog
-            dialog = FileSelectionDialog(self.app.root, "Select Translation Version", prompt_text, candidate_files)
+            dialog = FileSelectionDialog(self.app.root, "Select Translation Version", prompt_text, list(filename_to_path.keys()))
             if not dialog.result:
-                # User cancelled
                 return
-            output_filename = dialog.result
+            output_path = filename_to_path[dialog.result]
 
-        translated_path = os.path.join(self.app.output_dir, output_filename)
+        translated_path = output_path
         source_path = os.path.join(self.app.english_subs_dir, srt_name)
         sysprm_path = os.path.join(self.app.sysprm_dir, sys_name)
             
@@ -644,12 +666,36 @@ class UIController:
             if not ans:
                 return
 
+        # 3.5 Dynamic Cost Estimation Pre-Flight Analysis
+        total_cues = 0
+        try:
+            with open(translated_path, 'r', encoding='utf-8-sig') as f:
+                content = f.read()
+                total_cues = content.count('-->')
+        except Exception:
+            total_cues = 500  # Safe engineering fallback if reading fails
+            
+        approx_batches = max(1, (total_cues + user_batch - 1) // user_batch)
+        
+        # Calibrated empirical token footprint formulas based on standard broadcasting glossaries
+        est_input = (approx_batches * 3500) + (total_cues * 20)
+        est_output = approx_batches * 1000
+        
+        in_rate = model_cfg.get("input_price", 0.0)
+        out_rate = model_cfg.get("output_price", 0.0)
+        
+        if in_rate > 0 or out_rate > 0:
+            est_cost = ((est_input / 1_000_000.0) * in_rate) + ((est_output / 1_000_000.0) * out_rate)
+            cost_str = f"Approx. ${est_cost:.4f} USD"
+        else:
+            cost_str = "Free (Local Model or pricing not set)"
+
         # 4. Ask Consent
         ans = messagebox.askyesno("Confirm Senior Editor Audit", 
-            f"Do you want to run a Senior Editor semantic audit on:\n'{output_filename}'?\n\n"
+            f"Do you want to run a Senior Editor semantic audit on:\n'{os.path.basename(translated_path)}'?\n\n"
             f"💡 Heavyweight Auditor: {model_cfg['name']}\n"
-            f"📦 Processing Batch Size: {user_batch}\n"
-            f"💰 Estimated total cost: Less than $0.03 USD.\n\n"
+            f"📦 Project Scale: {total_cues} cues ({approx_batches} batches)\n"
+            f"💰 Estimated total cost: {cost_str}.\n\n"
             f"The audit operates asynchronously, compiling live ETAs and streaming results to the logs.\n"
             f"Proceed?", parent=self.app.root)
             

@@ -51,10 +51,40 @@ You can utilize the **Confidence Threshold Control Panel** in the toolbar for hy
 4. **☑️ Select Above**: Bulk-ticks the checkboxes for all rows meeting or exceeding your confidence minimum while clearing checks for weaker suggestions, saving you dozens of manual clicks!
 5. **Show All**: Resets the filter completely, restoring instant visibility to every single suggestion in their original order.
 
+### Step 3.2: The Recommended "Rescue" Workflow (Hyper-Efficient Review)
+For maximum speed and safety, we recommend the **"Rescue" Method** when reviewing larger batches. This allows you to instantly accept high-probability fixes while focusing 100% of your manual attention on lower-confidence items:
+
+1. **Set the Bar**: Slide the Confidence Threshold to **`0.70`** or **`0.80`**.
+2. **Auto-Approve**: Click **`☑️ Select Above`**. This immediately selects all high-confidence items and unchecks everything else in memory.
+3. **Clear the Noise**: Click **`👁️ Hide Above`**. This visually hides the checked, high-confidence rows, leaving **ONLY** the unchecked lower-confidence items on your screen.
+4. **Rescue Selected Items**: Quickly scroll through the remaining low-confidence suggestions. Manually check the boxes for any specific phrasing or stylistic improvements you wish to rescue and apply.
+5. **Finish Strong**: Proceed directly to Click **`💾 Apply Selected Fixes`**. 
+   *(Note: The hidden high-confidence items **remain checked in memory** and will be successfully applied along with your manually rescued items!)*
+
 ### Step 4: The State-Protection Save
 Click **`💾 Apply Selected Fixes`**. Aegis protects your data with two crucial safety layers:
 1. **The Backup Prompt**: If a backup clone already exists, Aegis asks if you'd like to Overwrite it (Yes), Preserve the original pristine backup intact while saving the new edits (No), or Cancel.
 2. **RTL Punctuation Pass**: Aegis automatically re-adjusts raw Hebrew punctuation layouts back to the specific formats required for standard video media players!
+
+---
+
+## 📜 Reviewing Past Audit Runs (Historical Retrieval)
+
+Did you close a past audit without saving, or do you want to re-open the Visual Review Board for an older translation to apply additional changes? Aegis includes a fully decoupled **Historical Audit Retrieval Console**!
+
+### How to Trigger Retrieval:
+1. Ensure the **Source Subtitle File** text field in the main Aegis window is **EMPTY** (clear the text).
+2. Click the **`✨ Audit`** button.
+3. The **Historical Audit Retrieval Console** popup will immediately launch.
+
+### How the Retrieval Process Works:
+* **Auto-Archive Scan**: Aegis instantly compiles all past Senior Editor Markdown reports archived inside your `Audit reports/` folder, sorted chronologically by execution timestamp.
+* **Double-Click to Launch**: Select any past report row from the treeview list and click **Launch Visual Review Board** (or double-click it).
+* **Intelligent Subtitle Resolution**: 
+  1. Aegis parses the selected Markdown report back into live structured memory (reconstructing the full English/Hebrew mappings, AI reasons, and confidence metadata).
+  2. It automatically scans your workspace directory recursively to locate the corresponding physical `.srt` subtitle file.
+  3. *Fallback*: If the subtitle file has been moved or renamed, Aegis will elegantly prompt you to manually browse and select the target `.srt` file you wish to modify.
+* **Seamless Application**: The standard **Visual Merge Board** materialized instantly! You can now filter by confidence, use the "Rescue" workflow, and click **Apply** to safely patch that subtitle file exactly as if the audit had just finished running!
 
 ---
 
