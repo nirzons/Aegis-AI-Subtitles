@@ -47,6 +47,7 @@ BASE_TECHNICAL_RULES_EN = """
 - Gender Tracking: Carefully track the speakers' gender throughout the batch. If multiple consecutive lines belong to the same speaker (or talk about the same character from the dictionary), you must maintain the exact same gender for adjectives and verbs. Do not switch gender mid-paragraph.
 - Translation Boundaries: Translate ONLY the values appearing in the JSON dictionary under [Translation Blocks - JSON]. Under no circumstances should you include text found in the context blocks in the translation.
 - 1:1 Rule (Key Map Accuracy): You must return in 'translated_srt' ALL keys (indices) that appeared in the input. Do not omit any key and do not add new keys.
+- Strict Alignment (No Sentence Shifting): You MUST translate each source index's English sentence exactly into its corresponding target index. Never shift parts of a sentence or subsequent sentences to neighboring keys (do not merge or flow text across indices). Every target key must correspond strictly 1:1 to the exact semantic meaning of its source key, even if it creates shorter or fragmented lines.
 - No Source Language: Do not leave words in {source_lang} in the final translation (except for brand names or acronyms without accepted translation, like CNN or CBS). Critical Exception: When a single English letter appears to describe a shape or object (e.g., The "I" piece, V-shaped), you must transliterate the letter's name to {target_lang}. Never leave the English letters in the output.
 """
 

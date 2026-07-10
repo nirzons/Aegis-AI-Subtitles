@@ -341,22 +341,32 @@ def check_heuristics(eng_dict, target_dict, illegal_labels=None, profile=None):
             speaker_match = RE_SPEAKER_NAME.search(target_text)
             if speaker_match:
                 found_name = speaker_match.group(1).strip()
-                # Absolute prohibited labels (Dynamic from sysprm)
-                if found_name.lower() in [val.lower() for val in illegal_labels]:
-                    reasons.append(f"STRICT: Illegal label detected in {idx} ('{found_name}')")
-                    native_reasons.append(get_msg("heur_illegal_label", "IDX:{idx}|Host name or illegal label detected ('{found_name}:') at index {idx}. It is strictly forbidden to include speaker or host names. Delete it immediately!", idx=idx, found_name=found_name))
-                # General name labels
+                # Avoid flagging grammatical colons unless they are preceded by uppercase/known speaker tags
+                is_speaker = False
+                if illegal_labels and found_name.lower() in [val.lower() for val in illegal_labels]:
+                    is_speaker = True
                 else:
-                    is_exempt = False
-                    if profile and profile.use_native_instructions and profile.native_exempt_labels:
-                        if found_name.lower() in [val.lower() for val in profile.native_exempt_labels]:
-                            is_exempt = True
-                    elif found_name.lower() in ["note", "attention", "p.s"]:
-                         is_exempt = True
-                    
-                    if not is_exempt:
-                        reasons.append(f"Speaker name found in {idx} ('{found_name}')")
-                        native_reasons.append(get_msg("heur_speaker_name", "IDX:{idx}|Speaker name detected ('{found_name}:') at index {idx}. Speaker names must be deleted!", idx=idx, found_name=found_name))
+                    latin_chars = [c for c in found_name if c.isalpha() and ord(c) < 128]
+                    if latin_chars and all(c.isupper() for c in latin_chars):
+                        is_speaker = True
+                
+                if is_speaker:
+                    # Absolute prohibited labels (Dynamic from sysprm)
+                    if found_name.lower() in [val.lower() for val in illegal_labels]:
+                        reasons.append(f"STRICT: Illegal label detected in {idx} ('{found_name}')")
+                        native_reasons.append(get_msg("heur_illegal_label", "IDX:{idx}|Host name or illegal label detected ('{found_name}:') at index {idx}. It is strictly forbidden to include speaker or host names. Delete it immediately!", idx=idx, found_name=found_name))
+                    # General name labels
+                    else:
+                        is_exempt = False
+                        if profile and profile.use_native_instructions and profile.native_exempt_labels:
+                            if found_name.lower() in [val.lower() for val in profile.native_exempt_labels]:
+                                is_exempt = True
+                        elif found_name.lower() in ["note", "attention", "p.s"]:
+                             is_exempt = True
+                        
+                        if not is_exempt:
+                            reasons.append(f"Speaker name found in {idx} ('{found_name}')")
+                            native_reasons.append(get_msg("heur_speaker_name", "IDX:{idx}|Speaker name detected ('{found_name}:') at index {idx}. Speaker names must be deleted!", idx=idx, found_name=found_name))
 
             if '[' in target_text or ']' in target_text:
                 reasons.append(f"Square bracket SDH found in {idx}")
@@ -502,8 +512,18 @@ def pre_audit_source(eng_dict, illegal_labels=None, profile=None):
         speaker_match = RE_SPEAKER_NAME.search(txt)
         if speaker_match:
             found_name = speaker_match.group(1).strip()
-            msg = get_msg("pre_speaker_name", "Speaker name ('{found_name}:') - Delete name, keep dialogue.", found_name=found_name)
-            warnings.append((idx, msg))
+            
+            is_speaker = False
+            if illegal_labels and found_name.lower() in [val.lower() for val in illegal_labels]:
+                is_speaker = True
+            else:
+                latin_chars = [c for c in found_name if c.isalpha() and ord(c) < 128]
+                if latin_chars and all(c.isupper() for c in latin_chars):
+                    is_speaker = True
+                    
+            if is_speaker:
+                msg = get_msg("pre_speaker_name", "Speaker name ('{found_name}:') - Delete name, keep dialogue.", found_name=found_name)
+                warnings.append((idx, msg))
             
         # 2. Look for SDH tags in brackets (e.g., [music], (coughs))
         sdh_match = RE_SDH_BRACKETS.search(txt)

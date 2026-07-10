@@ -103,7 +103,7 @@ The JSON must include:
 
 2. `series_context`: An array of strings organized with Markdown headers (###). It must include:
     - **Characters & Gender**: A list of all main characters with their gender and target-language transliteration.
-    - **Dictionary**: A comprehensive list of show-specific terminology using the exact format: `- "Source Term" -> "Target Term" (Optional: Brief parenthetical explanation of the term's meaning in the show)`.
+    - **Dictionary**: A comprehensive list of show-specific terminology using the exact format: `- "Source Term" -> "Target Term" (Optional: Brief parenthetical explanation of the term's meaning in the show)`. The dictionary should include the name of the show.
     - **Technical Rules**: Specific rules for handling labels, speaker tags (e.g. "PROBST:"), and tone.
 
 3. `initial_context`: {{
